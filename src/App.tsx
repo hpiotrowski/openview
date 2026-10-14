@@ -289,6 +289,7 @@ export const App: React.FC = () => {
         onToggleWatchlist={() => setWatchlistOpen(!watchlistOpen)}
         onBackToLobby={() => setMode('lobby')}
         onOpenArena={() => setMode('arena')}
+        currentPrice={currentBarPrice}
       />
 
       {/* Main Workspace: Left Drawing Toolbar + Central Chart Area + Right Watchlist */}

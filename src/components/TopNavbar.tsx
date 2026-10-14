@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   CandlestickChart,
   LineChart,
@@ -43,6 +43,7 @@ interface TopNavbarProps {
   onToggleWatchlist: () => void;
   onBackToLobby?: () => void;
   onOpenArena?: () => void;
+  currentPrice?: number;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -66,11 +67,28 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onToggleWatchlist,
   onBackToLobby,
   onOpenArena,
+  currentPrice,
 }) => {
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [chartTypeMenuOpen, setChartTypeMenuOpen] = useState(false);
+  const [priceFlash, setPriceFlash] = useState<'up' | 'down' | null>(null);
+  const prevPriceRef = useRef<number>(currentPrice || 0);
+
+  useEffect(() => {
+    if (!currentPrice || currentPrice === prevPriceRef.current) return;
+    if (prevPriceRef.current > 0) {
+      if (currentPrice > prevPriceRef.current) {
+        setPriceFlash('up');
+      } else if (currentPrice < prevPriceRef.current) {
+        setPriceFlash('down');
+      }
+    }
+    prevPriceRef.current = currentPrice;
+    const timer = setTimeout(() => setPriceFlash(null), 300);
+    return () => clearTimeout(timer);
+  }, [currentPrice]);
 
   const filteredSymbols = POPULAR_SYMBOLS.filter(
     (s) =>
@@ -160,6 +178,36 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             </div>
           )}
         </div>
+
+        {/* Real-time Ticking Price Pill */}
+        {currentPrice !== undefined && currentPrice > 0 && (
+          <div
+            className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded font-mono font-bold text-xs transition-colors duration-150 border ${
+              priceFlash === 'up'
+                ? 'bg-[#089981]/20 text-[#089981] border-[#089981]/50 shadow-xs'
+                : priceFlash === 'down'
+                ? 'bg-[#f23645]/20 text-[#f23645] border-[#f23645]/50 shadow-xs'
+                : 'bg-[#131722] text-[#d1d4dc] border-[#2a2e39]'
+            }`}
+            title="Binance real-time tick price"
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                priceFlash === 'up'
+                  ? 'bg-[#089981]'
+                  : priceFlash === 'down'
+                  ? 'bg-[#f23645]'
+                  : 'bg-emerald-400'
+              } animate-pulse`}
+            />
+            <span>
+              ${currentPrice.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 4,
+              })}
+            </span>
+          </div>
+        )}
 
         {/* Timeframes Bar */}
         <div className="flex items-center space-x-0.5 bg-[#131722]/50 p-0.5 rounded border border-[#2a2e39]">

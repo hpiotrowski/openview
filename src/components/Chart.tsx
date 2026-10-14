@@ -59,6 +59,9 @@ export const Chart: React.FC<ChartProps> = ({
   const [profileResult, setProfileResult] = useState<VolumeProfileResult | null>(null);
   const [smcResult, setSmcResult] = useState<SMCResult | null>(null);
   const [countdown, setCountdown] = useState<string>('');
+  const [livePrice, setLivePrice] = useState<number>(0);
+  const [priceDirection, setPriceDirection] = useState<'up' | 'down' | 'same'>('same');
+  const lastPriceRef = useRef<number>(0);
   const rawBarsRef = useRef<KLineBar[]>([]);
   const liveUpdateCallbackRef = useRef<((bar: KLineBar) => void) | null>(null);
   const isReplayActiveRef = useRef<boolean>(isReplayActive);
@@ -439,8 +442,14 @@ export const Chart: React.FC<ChartProps> = ({
             callback(bars);
             setLoading(false);
 
-            if (bars.length > 0 && onPriceUpdate) {
-              onPriceUpdate(bars[bars.length - 1].close);
+            if (bars.length > 0) {
+              const lastBar = bars[bars.length - 1];
+              BinanceService.setActiveBar(id, lastBar);
+              setLivePrice(lastBar.close);
+              lastPriceRef.current = lastBar.close;
+              if (onPriceUpdate) {
+                onPriceUpdate(lastBar.close);
+              }
             }
           }
         } catch (err) {
@@ -452,33 +461,56 @@ export const Chart: React.FC<ChartProps> = ({
         liveUpdateCallbackRef.current = callback;
         if (!isReplayActive) {
           let lastUpdateTime = 0;
-          BinanceService.subscribeKlines(id, symbol, interval, (newBar) => {
-            callback(newBar);
-            if (onPriceUpdate) onPriceUpdate(newBar.close);
+          const initialBar =
+            rawBarsRef.current.length > 0
+              ? rawBarsRef.current[rawBarsRef.current.length - 1]
+              : undefined;
 
-            // Update live bar in rawBarsRef
-            const currentBars = rawBarsRef.current;
-            if (currentBars.length > 0) {
-              const lastIdx = currentBars.length - 1;
-              if (currentBars[lastIdx].timestamp === newBar.timestamp) {
-                currentBars[lastIdx] = newBar;
-              } else if (newBar.timestamp > currentBars[lastIdx].timestamp) {
-                currentBars.push(newBar);
-              }
+          BinanceService.subscribeKlines(
+            id,
+            symbol,
+            interval,
+            (newBar) => {
+              callback(newBar);
 
-              // Throttle overlay recalculation every 2 seconds
-              const now = Date.now();
-              if (now - lastUpdateTime > 2000) {
-                lastUpdateTime = now;
-                updateVolumeProfile(currentBars);
-                updateSmc(currentBars);
-                updateZones(currentBars);
-                updateCipherA(currentBars);
-                updateVwap(currentBars);
-                updateLiq(currentBars);
+              const prevPrice = lastPriceRef.current;
+              if (prevPrice > 0) {
+                if (newBar.close > prevPrice) {
+                  setPriceDirection('up');
+                } else if (newBar.close < prevPrice) {
+                  setPriceDirection('down');
+                }
               }
-            }
-          });
+              lastPriceRef.current = newBar.close;
+              setLivePrice(newBar.close);
+
+              if (onPriceUpdate) onPriceUpdate(newBar.close);
+
+              // Update live bar in rawBarsRef
+              const currentBars = rawBarsRef.current;
+              if (currentBars.length > 0) {
+                const lastIdx = currentBars.length - 1;
+                if (currentBars[lastIdx].timestamp === newBar.timestamp) {
+                  currentBars[lastIdx] = newBar;
+                } else if (newBar.timestamp > currentBars[lastIdx].timestamp) {
+                  currentBars.push(newBar);
+                }
+
+                // Throttle overlay recalculation every 2 seconds
+                const now = Date.now();
+                if (now - lastUpdateTime > 2000) {
+                  lastUpdateTime = now;
+                  updateVolumeProfile(currentBars);
+                  updateSmc(currentBars);
+                  updateZones(currentBars);
+                  updateCipherA(currentBars);
+                  updateVwap(currentBars);
+                  updateLiq(currentBars);
+                }
+              }
+            },
+            initialBar
+          );
         }
       },
       unsubscribeBar: () => {
@@ -636,6 +668,23 @@ export const Chart: React.FC<ChartProps> = ({
             {interval}
           </span>
           <div className="w-1.5 h-1.5 rounded-full bg-[#089981] animate-pulse-live" />
+          {livePrice > 0 && (
+            <>
+              <div className="h-3 w-[1px] bg-[#2a2e39]" />
+              <span
+                className={`text-xs font-mono font-bold transition-colors duration-150 ${
+                  priceDirection === 'up'
+                    ? 'text-[#089981]'
+                    : priceDirection === 'down'
+                    ? 'text-[#f23645]'
+                    : 'text-[#d1d4dc]'
+                }`}
+                title="Real-time live tick price"
+              >
+                ${livePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+              </span>
+            </>
+          )}
           <div className="h-3 w-[1px] bg-[#2a2e39]" />
           <div className="flex items-center space-x-1.5 text-[11px] font-mono" title="Time remaining until candle close">
             <Clock size={12} className="text-[#868993]" />

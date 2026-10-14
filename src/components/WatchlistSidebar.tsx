@@ -27,9 +27,18 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
   };
 
   useEffect(() => {
+    // Initial snapshot
     loadTickers();
-    const interval = setInterval(loadTickers, 8000);
-    return () => clearInterval(interval);
+
+    // Real-time live market feed (1s miniTicker stream)
+    BinanceService.subscribeWatchlist('watchlist-global', (updatedTickers) => {
+      setTickers(updatedTickers);
+      setLoading(false);
+    });
+
+    return () => {
+      BinanceService.unsubscribe('watchlist-global');
+    };
   }, []);
 
   if (!isOpen) return null;
