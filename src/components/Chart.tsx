@@ -17,6 +17,11 @@ import { AnchoredVwapCalculator, AnchoredVwapResult } from '../services/anchored
 import { VwapOverlay } from './VwapOverlay';
 import { LiquidationHeatmapCalculator, LiquidationHeatmapResult } from '../services/liquidationHeatmap';
 import { LiquidationOverlay } from './LiquidationOverlay';
+import { HtfLevelsCalculator, HtfLevelsResult } from '../services/htfLevels';
+import { HtfLevelsOverlay } from './HtfLevelsOverlay';
+import { NakedPocCalculator, NakedPocResult } from '../services/nakedPoc';
+import { NakedPocOverlay } from './NakedPocOverlay';
+import { FrvpOverlay } from './FrvpOverlay';
 import { ReplayEngine } from '../services/replayEngine';
 import { AVAILABLE_INDICATORS } from './IndicatorsModal';
 
@@ -195,6 +200,48 @@ export const Chart: React.FC<ChartProps> = ({
     }
   }, []);
 
+  // Update Higher Timeframe Key Levels (PDH, PDL, PWH, PWL, Opens, Monday Range)
+  const [htfResult, setHtfResult] = useState<HtfLevelsResult | null>(null);
+  const updateHtf = useCallback((bars: KLineBar[]) => {
+    if (bars && bars.length > 10) {
+      setHtfResult(HtfLevelsCalculator.calculate(bars));
+    }
+  }, []);
+
+  // Update Naked POC Tracker
+  const [nakedPocResult, setNakedPocResult] = useState<NakedPocResult | null>(null);
+  const updateNakedPoc = useCallback((bars: KLineBar[]) => {
+    if (bars && bars.length > 30) {
+      setNakedPocResult(NakedPocCalculator.calculate(bars));
+    }
+  }, []);
+
+  // Fixed Range Volume Profile (FRVP)
+  const [frvpRange, setFrvpRange] = useState<{ startTimestamp: number; endTimestamp: number } | null>(null);
+  const [frvpResult, setFrvpResult] = useState<VolumeProfileResult | null>(null);
+  const [frvpPendingStart, setFrvpPendingStart] = useState<number | null>(null);
+  const frvpFirstClickRef = useRef<number | null>(null);
+  const activeDrawingToolRef = useRef<string | null>(activeDrawingTool);
+
+  useEffect(() => {
+    activeDrawingToolRef.current = activeDrawingTool;
+    if (activeDrawingTool !== 'frvp') {
+      frvpFirstClickRef.current = null;
+      setFrvpPendingStart(null);
+    }
+  }, [activeDrawingTool]);
+
+  const updateFrvp = useCallback((bars: KLineBar[], currentRange = frvpRange) => {
+    if (currentRange && bars && bars.length > 0) {
+      const slice = bars.filter(
+        (b) => b.timestamp >= currentRange.startTimestamp && b.timestamp <= currentRange.endTimestamp
+      );
+      if (slice.length > 0) {
+        setFrvpResult(VolumeProfileCalculator.calculate(slice, 35));
+      }
+    }
+  }, [frvpRange]);
+
   // Helper to synchronize indicators cleanly with KlineCharts (no duplicates, clean removals)
   const syncIndicators = useCallback((chart: KLineChartInstance, targetIndicators: string[]) => {
     try {
@@ -230,6 +277,8 @@ export const Chart: React.FC<ChartProps> = ({
         'KILLZONES',
         'AVWAP',
         'LIQUIDATION_HEATMAP',
+        'HTF_LEVELS',
+        'NAKED_POC',
       ];
 
       targetIndicators.forEach((indName) => {
@@ -346,10 +395,34 @@ export const Chart: React.FC<ChartProps> = ({
       }
     });
 
-    // Bar click for Replay Mode activation
+    // Bar click for FRVP anchor or Replay Mode activation
     chart.subscribeAction('onCandleBarClick', (data: any) => {
-      if (isReplayActiveRef.current && data && data.kLineData) {
-        replayEngine.startReplay(data.kLineData.timestamp);
+      if (!data || !data.kLineData) return;
+      const clickedTimestamp = data.kLineData.timestamp;
+
+      if (activeDrawingToolRef.current === 'frvp') {
+        if (!frvpFirstClickRef.current) {
+          frvpFirstClickRef.current = clickedTimestamp;
+          setFrvpPendingStart(clickedTimestamp);
+        } else {
+          const start = Math.min(frvpFirstClickRef.current, clickedTimestamp);
+          const end = Math.max(frvpFirstClickRef.current, clickedTimestamp);
+          frvpFirstClickRef.current = null;
+          setFrvpPendingStart(null);
+          const newRange = { startTimestamp: start, endTimestamp: end };
+          setFrvpRange(newRange);
+
+          const rangeBars = rawBarsRef.current.filter((b) => b.timestamp >= start && b.timestamp <= end);
+          if (rangeBars.length > 0) {
+            setFrvpResult(VolumeProfileCalculator.calculate(rangeBars, 35));
+          }
+          if (onOverlayCreated) onOverlayCreated();
+        }
+        return;
+      }
+
+      if (isReplayActiveRef.current) {
+        replayEngine.startReplay(clickedTimestamp);
       }
     });
 
@@ -396,7 +469,7 @@ export const Chart: React.FC<ChartProps> = ({
   // 4. Handle Active Drawing Tool
   useEffect(() => {
     const chart = chartInstanceRef.current;
-    if (chart && activeDrawingTool) {
+    if (chart && activeDrawingTool && activeDrawingTool !== 'frvp') {
       try {
         chart.createOverlay(activeDrawingTool);
         if (onOverlayCreated) onOverlayCreated();
@@ -439,6 +512,9 @@ export const Chart: React.FC<ChartProps> = ({
             updateKillzones(bars);
             updateVwap(bars);
             updateLiq(bars);
+            updateHtf(bars);
+            updateNakedPoc(bars);
+            updateFrvp(bars);
             callback(bars);
             setLoading(false);
 
@@ -506,6 +582,9 @@ export const Chart: React.FC<ChartProps> = ({
                   updateCipherA(currentBars);
                   updateVwap(currentBars);
                   updateLiq(currentBars);
+                  updateHtf(currentBars);
+                  updateNakedPoc(currentBars);
+                  updateFrvp(currentBars);
                 }
               }
             },
@@ -540,6 +619,9 @@ export const Chart: React.FC<ChartProps> = ({
         updateKillzones(event.bars);
         updateVwap(event.bars);
         updateLiq(event.bars);
+        updateHtf(event.bars);
+        updateNakedPoc(event.bars);
+        updateFrvp(event.bars);
         if (event.currentBar && onPriceUpdate) {
           onPriceUpdate(event.currentBar.close);
         }
@@ -561,6 +643,9 @@ export const Chart: React.FC<ChartProps> = ({
         updateKillzones(event.bars);
         updateVwap(event.bars);
         updateLiq(event.bars);
+        updateHtf(event.bars);
+        updateNakedPoc(event.bars);
+        updateFrvp(event.bars);
       } else if (event.type === 'stop') {
         activeChart.resetData();
         const bars = rawBarsRef.current;
@@ -571,6 +656,9 @@ export const Chart: React.FC<ChartProps> = ({
         updateKillzones(bars);
         updateVwap(bars);
         updateLiq(bars);
+        updateHtf(bars);
+        updateNakedPoc(bars);
+        updateFrvp(bars);
         if (bars.length > 0 && onPriceUpdate) {
           onPriceUpdate(bars[bars.length - 1].close);
         }
@@ -587,12 +675,29 @@ export const Chart: React.FC<ChartProps> = ({
       updateKillzones(visible);
       updateVwap(visible);
       updateLiq(visible);
+      updateHtf(visible);
+      updateNakedPoc(visible);
+      updateFrvp(visible);
     }
 
     return () => {
       unsubscribe();
     };
-  }, [replayEngine, isReplayActive, onPriceUpdate, updateVolumeProfile, updateSmc, updateZones, updateCipherA, updateKillzones, updateVwap, updateLiq]);
+  }, [
+    replayEngine,
+    isReplayActive,
+    onPriceUpdate,
+    updateVolumeProfile,
+    updateSmc,
+    updateZones,
+    updateCipherA,
+    updateKillzones,
+    updateVwap,
+    updateLiq,
+    updateHtf,
+    updateNakedPoc,
+    updateFrvp,
+  ]);
 
   return (
     <div className="relative w-full h-full bg-[#131722] overflow-hidden">
@@ -649,6 +754,42 @@ export const Chart: React.FC<ChartProps> = ({
         liqData={liqResult}
         visible={activeIndicators.includes('LIQUIDATION_HEATMAP')}
       />
+
+      {/* Higher Timeframe Key Levels (PDH, PDL, PWH, PWL, Opens, Monday Range) */}
+      <HtfLevelsOverlay
+        chart={chartInstanceRef.current}
+        htfData={htfResult}
+        visible={activeIndicators.includes('HTF_LEVELS')}
+      />
+
+      {/* Naked POC Tracker (Untested Volume Magnet Rays) */}
+      <NakedPocOverlay
+        chart={chartInstanceRef.current}
+        nakedPocData={nakedPocResult}
+        visible={activeIndicators.includes('NAKED_POC')}
+      />
+
+      {/* Fixed Range Volume Profile (FRVP) */}
+      <FrvpOverlay
+        chart={chartInstanceRef.current}
+        range={frvpRange}
+        profile={frvpResult}
+        visible={!!frvpRange}
+        onClear={() => {
+          setFrvpRange(null);
+          setFrvpResult(null);
+        }}
+      />
+
+      {/* FRVP Anchor Prompt Banner */}
+      {frvpPendingStart && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-[#1e222d]/95 border border-[#2962ff] px-4 py-2 rounded-lg shadow-2xl text-xs pointer-events-none animate-in fade-in">
+          <div className="w-2 h-2 rounded-full bg-[#2962ff] animate-ping" />
+          <span className="font-semibold text-white">
+            FRVP Start Point Set! Click the end candle on chart to complete the Fixed Range.
+          </span>
+        </div>
+      )}
 
       {/* Loading Overlay */}
       {loading && (

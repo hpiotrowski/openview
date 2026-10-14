@@ -203,6 +203,22 @@ export const AVAILABLE_INDICATORS: IndicatorItem[] = [
     description: 'Leverage liquidation clusters (10x, 25x, 50x, 100x) and proximity-based liquidity magnets.',
     isOverlay: true,
   },
+  {
+    id: 'HTF_LEVELS',
+    name: 'Higher Timeframe Key Levels (PDH/PDL, PWH/PWL, Opens, Monday Range)',
+    shortName: 'HTF Levels',
+    category: 'Overlay',
+    description: 'Automated institutional levels: Previous Day High/Low, Previous Week High/Low, Daily/Weekly/Monthly Opens, and Monday Range with sweep detection.',
+    isOverlay: true,
+  },
+  {
+    id: 'NAKED_POC',
+    name: 'Naked POC Tracker (Untested Volume Magnet)',
+    shortName: 'nPOC',
+    category: 'Order Flow & Volume',
+    description: 'Historical virgin Point of Control (POC) levels from past daily sessions that have never been mitigated by price.',
+    isOverlay: true,
+  },
 ];
 
 interface IndicatorsModalProps {

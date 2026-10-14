@@ -13,6 +13,7 @@ import {
   Maximize2,
   GitCommit,
   SplitSquareHorizontal,
+  BarChart2,
 } from 'lucide-react';
 
 export interface DrawingTool {
@@ -39,6 +40,7 @@ export const DRAWING_TOOLS: DrawingTool[] = [
   { id: 'horizontalStraightLine', name: 'Horizontal Line', icon: SlidersHorizontal, overlayName: 'horizontalStraightLine', tooltip: 'Horizontal Line' },
   { id: 'horizontalRayLine', name: 'Horizontal Ray', icon: ArrowUpRight, overlayName: 'horizontalRayLine', tooltip: 'Horizontal Ray' },
   { id: 'fibonacciLine', name: 'Fibonacci Retracement', icon: GitCommit, overlayName: 'fibonacciLine', tooltip: 'Fibonacci Retracement' },
+  { id: 'frvp', name: 'Fixed Range Volume Profile', icon: BarChart2, overlayName: 'frvp', tooltip: 'Fixed Range Volume Profile (Click start & end candle)' },
   { id: 'priceChannelLine', name: 'Parallel Channel', icon: SplitSquareHorizontal, overlayName: 'priceChannelLine', tooltip: 'Parallel Channel' },
   { id: 'rect', name: 'Rectangle', icon: Square, overlayName: 'rect', tooltip: 'Rectangle / Box' },
   { id: 'circle', name: 'Circle', icon: Circle, overlayName: 'circle', tooltip: 'Circle' },
