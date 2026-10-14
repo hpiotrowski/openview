@@ -14,6 +14,8 @@ import {
   Search,
   Check,
   PanelRight,
+  Home,
+  Flame,
 } from 'lucide-react';
 import { POPULAR_SYMBOLS, TIMEFRAMES } from '../services/binance';
 
@@ -39,6 +41,8 @@ interface TopNavbarProps {
   alertsCount: number;
   watchlistOpen: boolean;
   onToggleWatchlist: () => void;
+  onBackToLobby?: () => void;
+  onOpenArena?: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -60,6 +64,8 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   alertsCount,
   watchlistOpen,
   onToggleWatchlist,
+  onBackToLobby,
+  onOpenArena,
 }) => {
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
@@ -83,6 +89,29 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           </div>
           <span className="font-bold text-[#d1d4dc] tracking-tight hidden sm:inline">OpenView</span>
         </div>
+
+        {/* Navigation to Lobby & Arena */}
+        {onBackToLobby && (
+          <button
+            onClick={onBackToLobby}
+            className="flex items-center space-x-1 bg-[#2a2e39]/60 hover:bg-[#2a2e39] text-[#868993] hover:text-[#d1d4dc] px-2 py-1 rounded transition-colors"
+            title="Return to Mode Lobby"
+          >
+            <Home size={13} className="text-cyan-400" />
+            <span className="font-medium text-[11px]">Lobby</span>
+          </button>
+        )}
+
+        {onOpenArena && (
+          <button
+            onClick={onOpenArena}
+            className="flex items-center space-x-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-1 rounded transition-colors"
+            title="Open Trading Gym / Price Action Arena"
+          >
+            <Flame size={13} />
+            <span className="font-semibold text-[11px]">Trading Gym</span>
+          </button>
+        )}
 
         {/* Symbol Selector Dropdown */}
         <div className="relative">

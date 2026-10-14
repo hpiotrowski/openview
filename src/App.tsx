@@ -6,6 +6,8 @@ import { IndicatorsModal } from './components/IndicatorsModal';
 import { ReplayBar } from './components/ReplayBar';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { AlertsModal, PriceAlert } from './components/AlertsModal';
+import { Lobby } from './components/Lobby';
+import { TradingArena } from './components/TradingArena';
 import { ReplayEngine } from './services/replayEngine';
 import { Crosshair } from 'klinecharts';
 
@@ -16,6 +18,9 @@ interface ChartPanelConfig {
 }
 
 export const App: React.FC = () => {
+  // Navigation Mode
+  const [mode, setMode] = useState<'lobby' | 'terminal' | 'arena'>('lobby');
+
   // Global settings
   const [currentSymbol, setCurrentSymbol] = useState('BTCUSDT');
   const [currentInterval, setCurrentInterval] = useState('15m');
@@ -208,6 +213,19 @@ export const App: React.FC = () => {
 
   const visiblePanels = getVisiblePanels();
 
+  if (mode === 'lobby') {
+    return (
+      <Lobby
+        onSelectTerminal={() => setMode('terminal')}
+        onSelectArena={() => setMode('arena')}
+      />
+    );
+  }
+
+  if (mode === 'arena') {
+    return <TradingArena onBackToLobby={() => setMode('lobby')} />;
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#131722] text-[#d1d4dc] overflow-hidden select-none font-sans">
       {/* Top Navbar */}
@@ -238,6 +256,8 @@ export const App: React.FC = () => {
         alertsCount={alerts.filter((a) => !a.triggered).length}
         watchlistOpen={watchlistOpen}
         onToggleWatchlist={() => setWatchlistOpen(!watchlistOpen)}
+        onBackToLobby={() => setMode('lobby')}
+        onOpenArena={() => setMode('arena')}
       />
 
       {/* Main Workspace: Left Drawing Toolbar + Central Chart Area + Right Watchlist */}
