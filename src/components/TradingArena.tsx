@@ -3,6 +3,7 @@ import {
   init,
   dispose,
   Chart as KLineChartInstance,
+  Period,
   Nullable,
 } from 'klinecharts';
 import {
@@ -173,6 +174,15 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
   const visibleBarsRef = useRef<KLineBar[]>([]);
   const liveUpdateCallbackRef = useRef<((bar: KLineBar) => void) | null>(null);
 
+  const mapIntervalToPeriod = (intv: string): Period => {
+    if (intv.endsWith('s')) return { type: 'second', span: parseInt(intv) || 1 };
+    if (intv.endsWith('m')) return { type: 'minute', span: parseInt(intv) || 1 };
+    if (intv.endsWith('h')) return { type: 'hour', span: parseInt(intv) || 1 };
+    if (intv.endsWith('d') || intv.endsWith('D')) return { type: 'day', span: 1 };
+    if (intv.endsWith('w') || intv.endsWith('W')) return { type: 'week', span: 1 };
+    return { type: 'minute', span: 15 };
+  };
+
   // 1. Initialize Chart instance
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -229,6 +239,18 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
           liveUpdateCallbackRef.current = callback;
         },
       });
+
+      chart.setSymbol({
+        ticker: isRevealed ? scenario.realSymbol : 'CONFIDENTIAL',
+        pricePrecision: 2,
+        volumePrecision: 2,
+      });
+      chart.setPeriod(mapIntervalToPeriod(scenario.timeframe));
+      chart.resetData();
+      recalculateOverlays(visibleBarsRef.current);
+      try {
+        chart.scrollToRealTime();
+      } catch (e) {}
     }
 
     const ro = new ResizeObserver(() => {
@@ -243,7 +265,7 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     };
   }, []);
 
-  // 2. Refresh chart data whenever scenario or simIndex changes
+  // 2. Refresh chart data whenever scenario, simIndex, or isRevealed changes
   useEffect(() => {
     const chart = chartInstanceRef.current;
     if (!chart) return;
@@ -253,9 +275,19 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
       ...scenario.futureBars.slice(0, simIndex),
     ];
     visibleBarsRef.current = visibleBars;
+
+    chart.setSymbol({
+      ticker: isRevealed ? scenario.realSymbol : 'CONFIDENTIAL',
+      pricePrecision: 2,
+      volumePrecision: 2,
+    });
+    chart.setPeriod(mapIntervalToPeriod(scenario.timeframe));
     chart.resetData();
     recalculateOverlays(visibleBars);
-  }, [scenario, simIndex, recalculateOverlays]);
+    try {
+      chart.scrollToRealTime();
+    } catch (e) {}
+  }, [scenario, simIndex, isRevealed, recalculateOverlays]);
 
   // 3. Sync indicators whenever activeIndicators changes
   useEffect(() => {

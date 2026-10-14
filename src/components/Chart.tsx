@@ -61,6 +61,11 @@ export const Chart: React.FC<ChartProps> = ({
   const [countdown, setCountdown] = useState<string>('');
   const rawBarsRef = useRef<KLineBar[]>([]);
   const liveUpdateCallbackRef = useRef<((bar: KLineBar) => void) | null>(null);
+  const isReplayActiveRef = useRef<boolean>(isReplayActive);
+
+  useEffect(() => {
+    isReplayActiveRef.current = isReplayActive;
+  }, [isReplayActive]);
 
   // Interval duration helper
   const getIntervalMs = (intv: string): number => {
@@ -340,10 +345,8 @@ export const Chart: React.FC<ChartProps> = ({
 
     // Bar click for Replay Mode activation
     chart.subscribeAction('onCandleBarClick', (data: any) => {
-      if (isReplayActive && data && data.kLineData) {
-        const sliced = replayEngine.startReplay(data.kLineData.timestamp);
-        chart.resetData();
-        updateVolumeProfile(sliced);
+      if (isReplayActiveRef.current && data && data.kLineData) {
+        replayEngine.startReplay(data.kLineData.timestamp);
       }
     });
 
@@ -488,12 +491,61 @@ export const Chart: React.FC<ChartProps> = ({
     };
   }, [id, symbol, interval, isReplayActive]);
 
-  // 7. Replay playback update listener
+  // 7. Replay playback update listener via engine event subscription
   useEffect(() => {
-    if (!isReplayActive) return;
-
     const chart = chartInstanceRef.current;
-    if (chart && replayEngine.isReplaying) {
+
+    const unsubscribe = replayEngine.subscribe((event) => {
+      const activeChart = chartInstanceRef.current;
+      if (!activeChart) return;
+
+      if (event.type === 'start' || event.type === 'backward') {
+        activeChart.resetData();
+        updateVolumeProfile(event.bars);
+        updateSmc(event.bars);
+        updateZones(event.bars);
+        updateCipherA(event.bars);
+        updateKillzones(event.bars);
+        updateVwap(event.bars);
+        updateLiq(event.bars);
+        if (event.currentBar && onPriceUpdate) {
+          onPriceUpdate(event.currentBar.close);
+        }
+      } else if (event.type === 'step') {
+        if (event.currentBar) {
+          if (liveUpdateCallbackRef.current) {
+            liveUpdateCallbackRef.current(event.currentBar);
+          } else {
+            activeChart.resetData();
+          }
+          if (onPriceUpdate) {
+            onPriceUpdate(event.currentBar.close);
+          }
+        }
+        updateVolumeProfile(event.bars);
+        updateSmc(event.bars);
+        updateZones(event.bars);
+        updateCipherA(event.bars);
+        updateKillzones(event.bars);
+        updateVwap(event.bars);
+        updateLiq(event.bars);
+      } else if (event.type === 'stop') {
+        activeChart.resetData();
+        const bars = rawBarsRef.current;
+        updateVolumeProfile(bars);
+        updateSmc(bars);
+        updateZones(bars);
+        updateCipherA(bars);
+        updateKillzones(bars);
+        updateVwap(bars);
+        updateLiq(bars);
+        if (bars.length > 0 && onPriceUpdate) {
+          onPriceUpdate(bars[bars.length - 1].close);
+        }
+      }
+    });
+
+    if (isReplayActive && chart && replayEngine.isReplaying) {
       chart.resetData();
       const visible = replayEngine.getVisibleBars();
       updateVolumeProfile(visible);
@@ -504,7 +556,11 @@ export const Chart: React.FC<ChartProps> = ({
       updateVwap(visible);
       updateLiq(visible);
     }
-  }, [isReplayActive]);
+
+    return () => {
+      unsubscribe();
+    };
+  }, [replayEngine, isReplayActive, onPriceUpdate, updateVolumeProfile, updateSmc, updateZones, updateCipherA, updateKillzones, updateVwap, updateLiq]);
 
   return (
     <div className="relative w-full h-full bg-[#131722] overflow-hidden">
@@ -620,6 +676,18 @@ export const Chart: React.FC<ChartProps> = ({
           </div>
         )}
       </div>
+
+      {/* Replay HUD Status Banner */}
+      {isReplayActive && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 bg-[#1e222d]/90 backdrop-blur-md border border-[#2962ff]/50 px-3.5 py-1.5 rounded-lg shadow-xl text-xs pointer-events-none animate-in fade-in duration-200">
+          <div className="w-2 h-2 rounded-full bg-[#2962ff] animate-pulse" />
+          <span className="font-semibold text-gray-200">
+            {replayEngine.isReplaying
+              ? `Replay Active (${replayEngine.getVisibleBars().length} bars loaded) • Click any candle to jump`
+              : 'Replay Armed • Click any candle on chart to set cut point (or press Play)'}
+          </span>
+        </div>
+      )}
     </div>
   );
 };

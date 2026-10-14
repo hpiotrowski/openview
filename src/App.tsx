@@ -127,6 +127,17 @@ export const App: React.FC = () => {
     );
   };
 
+  // Synchronize Replay Engine events with App state
+  useEffect(() => {
+    const unsub = replayEngineRef.current.subscribe((event) => {
+      setIsPlaybackRunning(replayEngineRef.current.isPlaying);
+      if (event.currentBar) {
+        setCurrentBarPrice(event.currentBar.close);
+      }
+    });
+    return () => unsub();
+  }, []);
+
   // Replay actions
   const handleToggleReplay = () => {
     if (isReplaying) {
@@ -136,42 +147,62 @@ export const App: React.FC = () => {
     } else {
       setIsReplaying(true);
       setIsPlaybackRunning(false);
+      // Auto-initialize cut point at 80% if not yet sliced
+      if (!replayEngineRef.current.isReplaying) {
+        replayEngineRef.current.startReplay();
+      }
     }
   };
 
   const handleStepForward = () => {
-    const nextBar = replayEngineRef.current.stepForward();
-    if (nextBar) {
-      setCurrentBarPrice(nextBar.close);
-    }
+    replayEngineRef.current.stepForward();
   };
 
   const handleStepBackward = () => {
-    const bars = replayEngineRef.current.stepBackward();
-    if (bars && bars.length > 0) {
-      setCurrentBarPrice(bars[bars.length - 1].close);
-    }
+    replayEngineRef.current.stepBackward();
   };
 
   const handleTogglePlay = () => {
     const engine = replayEngineRef.current;
     if (engine.isPlaying) {
       engine.pause();
-      setIsPlaybackRunning(false);
     } else {
-      engine.play((bar) => {
-        setCurrentBarPrice(bar.close);
-      });
-      setIsPlaybackRunning(true);
+      engine.play();
     }
   };
 
   const handleSelectSpeed = (speed: number) => {
     setReplaySpeed(speed);
-    replayEngineRef.current.setSpeed(speed, (bar) => {
-      setCurrentBarPrice(bar.close);
-    });
+    replayEngineRef.current.setSpeed(speed);
   };
+
+  // Global keyboard shortcuts for Replay mode (Space = play/pause, Left/Right = step, Esc = exit)
+  useEffect(() => {
+    if (!isReplaying) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        handleStepForward();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        handleStepBackward();
+      } else if (e.code === 'Escape') {
+        e.preventDefault();
+        handleToggleReplay();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isReplaying]);
 
   // Crosshair move from one chart broadcasts to others
   const handleCrosshairMove = (crosshair: Crosshair, sourceId: string) => {
