@@ -626,6 +626,7 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
             stopLossPrice={stopLoss}
             takeProfitPrice={takeProfit}
             entryIndex={scenario.contextBars.length - 1}
+            entryTimestamp={scenario.contextBars[scenario.contextBars.length - 1]?.timestamp}
           />
 
           {/* Inflection Point Marker & Blind Badge */}

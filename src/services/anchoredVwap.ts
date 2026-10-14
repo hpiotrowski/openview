@@ -2,6 +2,7 @@ import { KLineBar } from './binance';
 
 export interface VwapPoint {
   index: number;
+  timestamp?: number;
   vwap: number;
   upper1: number;
   lower1: number;
@@ -11,6 +12,7 @@ export interface VwapPoint {
 
 export interface AnchoredVwapResult {
   anchorIndex: number;
+  anchorTimestamp?: number;
   anchorType: 'HIGH' | 'LOW' | 'START';
   anchorPrice: number;
   points: VwapPoint[];
@@ -74,6 +76,7 @@ export class AnchoredVwapCalculator {
 
       points.push({
         index: i,
+        timestamp: b.timestamp,
         vwap,
         upper1: vwap + stdDev,
         lower1: vwap - stdDev,
@@ -84,6 +87,7 @@ export class AnchoredVwapCalculator {
 
     return {
       anchorIndex,
+      anchorTimestamp: bars[anchorIndex]?.timestamp,
       anchorType,
       anchorPrice,
       points,

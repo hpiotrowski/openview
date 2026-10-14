@@ -109,13 +109,33 @@ export const Chart: React.FC<ChartProps> = ({
     return { type: 'minute', span: 15 };
   };
 
-  // Update Volume Profile
-  const updateVolumeProfile = useCallback((bars: KLineBar[]) => {
-    if (bars && bars.length > 0) {
-      const visibleBars = bars.slice(-150);
-      const res = VolumeProfileCalculator.calculate(visibleBars);
-      setProfileResult(res);
+  // Update Volume Profile (dynamically calculated for the visible viewport!)
+  const updateVolumeProfile = useCallback((bars?: KLineBar[]) => {
+    const chart = chartInstanceRef.current;
+    const allBars = bars || rawBarsRef.current;
+    if (!allBars || allBars.length === 0) return;
+
+    if (chart) {
+      try {
+        const range = chart.getVisibleRange();
+        if (range && typeof range.from === 'number' && typeof range.to === 'number') {
+          const from = Math.max(0, range.from);
+          const to = Math.min(allBars.length - 1, range.to);
+          if (to > from) {
+            const viewportBars = allBars.slice(from, to + 1);
+            if (viewportBars.length > 5) {
+              const res = VolumeProfileCalculator.calculate(viewportBars);
+              setProfileResult(res);
+              return;
+            }
+          }
+        }
+      } catch (e) {}
     }
+
+    const fallbackBars = allBars.slice(-150);
+    const res = VolumeProfileCalculator.calculate(fallbackBars);
+    setProfileResult(res);
   }, []);
 
   // Update Smart Money Concepts (SMC)
@@ -325,6 +345,11 @@ export const Chart: React.FC<ChartProps> = ({
         chart.resetData();
         updateVolumeProfile(sliced);
       }
+    });
+
+    // Dynamic Visible Range Volume Profile update on zoom and scroll
+    chart.subscribeAction('onVisibleRangeChange', () => {
+      updateVolumeProfile();
     });
 
     // Resize observer

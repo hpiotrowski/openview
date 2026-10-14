@@ -5,12 +5,15 @@ export interface SessionZone {
   label: string;
   startIndex: number;
   endIndex: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
   high: number;
   low: number;
   asianHighLine?: number;
   asianLowLine?: number;
   judasSwing?: {
     index: number;
+    timestamp?: number;
     type: 'BULLISH_JUDAS' | 'BEARISH_JUDAS';
     price: number;
     sweptLevel: number;
@@ -61,6 +64,7 @@ export class KillzonesCalculator {
         const lastSession = sessions[sessions.length - 1];
         if (lastSession && lastSession.name === 'ASIA' && lastSession.endIndex === i - 1) {
           lastSession.endIndex = i;
+          lastSession.endTimestamp = b.timestamp;
           lastSession.high = Math.max(lastSession.high, b.high);
           lastSession.low = Math.min(lastSession.low, b.low);
           lastSession.asianHighLine = currentAsianHigh;
@@ -71,6 +75,8 @@ export class KillzonesCalculator {
             label: 'Asian Session Range',
             startIndex: i,
             endIndex: i,
+            startTimestamp: b.timestamp,
+            endTimestamp: b.timestamp,
             high: b.high,
             low: b.low,
             asianHighLine: currentAsianHigh,
@@ -87,6 +93,7 @@ export class KillzonesCalculator {
         if (currentAsianHigh && b.high > currentAsianHigh && b.close < currentAsianHigh) {
           judasSwing = {
             index: i,
+            timestamp: b.timestamp,
             type: 'BEARISH_JUDAS',
             price: b.high,
             sweptLevel: currentAsianHigh,
@@ -94,6 +101,7 @@ export class KillzonesCalculator {
         } else if (currentAsianLow && b.low < currentAsianLow && b.close > currentAsianLow) {
           judasSwing = {
             index: i,
+            timestamp: b.timestamp,
             type: 'BULLISH_JUDAS',
             price: b.low,
             sweptLevel: currentAsianLow,
@@ -102,6 +110,7 @@ export class KillzonesCalculator {
 
         if (lastSession && lastSession.name === 'LONDON' && lastSession.endIndex === i - 1) {
           lastSession.endIndex = i;
+          lastSession.endTimestamp = b.timestamp;
           lastSession.high = Math.max(lastSession.high, b.high);
           lastSession.low = Math.min(lastSession.low, b.low);
           if (judasSwing && !lastSession.judasSwing) {
@@ -113,6 +122,8 @@ export class KillzonesCalculator {
             label: 'London Open Killzone',
             startIndex: i,
             endIndex: i,
+            startTimestamp: b.timestamp,
+            endTimestamp: b.timestamp,
             high: b.high,
             low: b.low,
             asianHighLine: currentAsianHigh,
@@ -127,6 +138,7 @@ export class KillzonesCalculator {
         const lastSession = sessions[sessions.length - 1];
         if (lastSession && lastSession.name === 'NEW_YORK' && lastSession.endIndex === i - 1) {
           lastSession.endIndex = i;
+          lastSession.endTimestamp = b.timestamp;
           lastSession.high = Math.max(lastSession.high, b.high);
           lastSession.low = Math.min(lastSession.low, b.low);
         } else {
@@ -135,6 +147,8 @@ export class KillzonesCalculator {
             label: 'New York Open Killzone',
             startIndex: i,
             endIndex: i,
+            startTimestamp: b.timestamp,
+            endTimestamp: b.timestamp,
             high: b.high,
             low: b.low,
             asianHighLine: currentAsianHigh,

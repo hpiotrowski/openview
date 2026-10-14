@@ -7,6 +7,8 @@ export interface FairValueGap {
   bottom: number;
   startIndex: number;
   endIndex: number;
+  startTimestamp: number;
+  endTimestamp: number;
   isMitigated: boolean;
 }
 
@@ -17,6 +19,8 @@ export interface OrderBlock {
   bottom: number;
   startIndex: number;
   endIndex: number;
+  startTimestamp: number;
+  endTimestamp: number;
   isMitigated: boolean;
 }
 
@@ -25,6 +29,7 @@ export interface StructureBreak {
   direction: 'BULLISH' | 'BEARISH';
   price: number;
   index: number;
+  timestamp: number;
 }
 
 export interface SMCResult {
@@ -72,6 +77,8 @@ export class SMCCalculator {
           bottom,
           startIndex: i - 1,
           endIndex,
+          startTimestamp: bars[i - 1].timestamp,
+          endTimestamp: bars[endIndex].timestamp,
           isMitigated,
         });
       }
@@ -98,6 +105,8 @@ export class SMCCalculator {
           bottom,
           startIndex: i - 1,
           endIndex,
+          startTimestamp: bars[i - 1].timestamp,
+          endTimestamp: bars[endIndex].timestamp,
           isMitigated,
         });
       }
@@ -140,6 +149,7 @@ export class SMCCalculator {
             direction: 'BULLISH',
             price: prev.price,
             index: curr.index,
+            timestamp: bars[curr.index].timestamp,
           });
           lastTrend = 'UP';
 
@@ -150,13 +160,16 @@ export class SMCCalculator {
           }
           if (obIdx >= prev.index) {
             const obCandle = bars[obIdx];
+            const endIdx = Math.min(n - 1, obIdx + 30);
             orderBlocks.push({
               id: `ob-bull-${obIdx}`,
               type: 'BULLISH',
               top: obCandle.high,
               bottom: obCandle.low,
               startIndex: obIdx,
-              endIndex: Math.min(n - 1, obIdx + 30),
+              endIndex: endIdx,
+              startTimestamp: obCandle.timestamp,
+              endTimestamp: bars[endIdx].timestamp,
               isMitigated: false,
             });
           }
@@ -169,6 +182,7 @@ export class SMCCalculator {
             direction: 'BEARISH',
             price: prev.price,
             index: curr.index,
+            timestamp: bars[curr.index].timestamp,
           });
           lastTrend = 'DOWN';
 
@@ -179,13 +193,16 @@ export class SMCCalculator {
           }
           if (obIdx >= prev.index) {
             const obCandle = bars[obIdx];
+            const endIdx = Math.min(n - 1, obIdx + 30);
             orderBlocks.push({
               id: `ob-bear-${obIdx}`,
               type: 'BEARISH',
               top: obCandle.high,
               bottom: obCandle.low,
               startIndex: obIdx,
-              endIndex: Math.min(n - 1, obIdx + 30),
+              endIndex: endIdx,
+              startTimestamp: obCandle.timestamp,
+              endTimestamp: bars[endIdx].timestamp,
               isMitigated: false,
             });
           }

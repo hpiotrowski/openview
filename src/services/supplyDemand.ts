@@ -7,6 +7,8 @@ export interface SDZone {
   bottom: number;
   startIndex: number;
   endIndex: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
   isTested: boolean;
   strength: 'STRONG' | 'NORMAL';
 }
@@ -16,6 +18,7 @@ export interface LiquiditySweep {
   type: 'BEARISH_SWEEP' | 'BULLISH_SWEEP'; // Bearish sweep = swept high and rejected down; Bullish sweep = swept low and rejected up
   price: number;
   index: number;
+  timestamp?: number;
 }
 
 export interface TradingSession {
@@ -24,6 +27,8 @@ export interface TradingSession {
   low: number;
   startIndex: number;
   endIndex: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
   color: string;
 }
 
@@ -32,6 +37,7 @@ export interface PremiumDiscount {
   low: number;
   equilibrium: number;
   startIndex: number;
+  startTimestamp?: number;
 }
 
 export interface ZonesAnalysisResult {
@@ -106,6 +112,8 @@ export class SupplyDemandCalculator {
           bottom,
           startIndex: i - 1,
           endIndex,
+          startTimestamp: bars[i - 1].timestamp,
+          endTimestamp: bars[endIndex].timestamp,
           isTested,
           strength: body > atr * 2.0 ? 'STRONG' : 'NORMAL',
         });
@@ -133,6 +141,8 @@ export class SupplyDemandCalculator {
           bottom,
           startIndex: i - 1,
           endIndex,
+          startTimestamp: bars[i - 1].timestamp,
+          endTimestamp: bars[endIndex].timestamp,
           isTested,
           strength: body > atr * 2.0 ? 'STRONG' : 'NORMAL',
         });
@@ -158,6 +168,7 @@ export class SupplyDemandCalculator {
           type: 'BEARISH_SWEEP',
           price: curr.high,
           index: i,
+          timestamp: curr.timestamp,
         });
       }
 
@@ -168,6 +179,7 @@ export class SupplyDemandCalculator {
           type: 'BULLISH_SWEEP',
           price: curr.low,
           index: i,
+          timestamp: curr.timestamp,
         });
       }
     }
@@ -186,6 +198,7 @@ export class SupplyDemandCalculator {
       low: swingLow,
       equilibrium: (swingHigh + swingLow) / 2,
       startIndex: windowStart,
+      startTimestamp: bars[windowStart]?.timestamp,
     };
 
     return {

@@ -2,6 +2,7 @@ import { KLineBar } from './binance';
 
 export interface RibbonPoint {
   index: number;
+  timestamp?: number;
   ema5: number;
   ema11: number;
   ema15: number;
@@ -15,6 +16,7 @@ export interface RibbonPoint {
 
 export interface CipherASignal {
   index: number;
+  timestamp?: number;
   type: 'BLUE_TRIANGLE' | 'GREEN_DIAMOND' | 'RED_DIAMOND' | 'BLOODHOUND_DIVERGENCE';
   direction: 'BULLISH' | 'BEARISH';
   price: number;
@@ -84,6 +86,7 @@ export class CipherACalculator {
 
       ribbon.push({
         index: i,
+        timestamp: bars[i].timestamp,
         ema5: e5,
         ema11: e11,
         ema15: ema15[i],
@@ -103,6 +106,7 @@ export class CipherACalculator {
         if (prevE5 <= prevE48 && e5 > e48) {
           signals.push({
             index: i,
+            timestamp: bars[i].timestamp,
             type: 'BLUE_TRIANGLE',
             direction: 'BULLISH',
             price: bars[i].low * 0.997,
@@ -111,6 +115,7 @@ export class CipherACalculator {
         } else if (prevE5 >= prevE48 && e5 < e48) {
           signals.push({
             index: i,
+            timestamp: bars[i].timestamp,
             type: 'BLUE_TRIANGLE',
             direction: 'BEARISH',
             price: bars[i].high * 1.003,
@@ -129,6 +134,7 @@ export class CipherACalculator {
           if (!signals.some((s) => Math.abs(s.index - i) < 5 && s.type === 'GREEN_DIAMOND')) {
             signals.push({
               index: i,
+              timestamp: bars[i].timestamp,
               type: 'GREEN_DIAMOND',
               direction: 'BULLISH',
               price: b.low * 0.995,
@@ -142,6 +148,7 @@ export class CipherACalculator {
           if (!signals.some((s) => Math.abs(s.index - i) < 5 && s.type === 'RED_DIAMOND')) {
             signals.push({
               index: i,
+              timestamp: bars[i].timestamp,
               type: 'RED_DIAMOND',
               direction: 'BEARISH',
               price: b.high * 1.005,
@@ -162,6 +169,7 @@ export class CipherACalculator {
         if (bars[i].high >= highestBar && spreadNow < spreadBefore * 0.6) {
           signals.push({
             index: i,
+            timestamp: bars[i].timestamp,
             type: 'BLOODHOUND_DIVERGENCE',
             direction: 'BEARISH',
             price: bars[i].high * 1.006,
@@ -170,6 +178,7 @@ export class CipherACalculator {
         } else if (bars[i].low <= lowestBar && spreadNow < spreadBefore * 0.6) {
           signals.push({
             index: i,
+            timestamp: bars[i].timestamp,
             type: 'BLOODHOUND_DIVERGENCE',
             direction: 'BULLISH',
             price: bars[i].low * 0.994,
