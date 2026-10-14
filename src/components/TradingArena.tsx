@@ -4,7 +4,6 @@ import {
   dispose,
   Chart as KLineChartInstance,
   Period,
-  Nullable,
 } from 'klinecharts';
 import {
   ScenarioInfo,
@@ -34,8 +33,8 @@ import {
   Play,
   Pause,
   SkipForward,
+  SkipBack,
   RotateCcw,
-  Sliders,
   TrendingUp,
   TrendingDown,
   FastForward,
@@ -47,6 +46,11 @@ import {
   Layers,
   ShieldAlert,
   Flame,
+  Zap,
+  Info,
+  ChevronRight,
+  X,
+  Volume2,
 } from 'lucide-react';
 
 interface TradingArenaProps {
@@ -65,9 +69,11 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
   // Scenario State
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'scalp' | 'daytrade' | 'swing'>('all');
   const [scenario, setScenario] = useState<ScenarioInfo>(() => ScenarioService.getRandomScenario());
+  const [isLoadingReal, setIsLoadingReal] = useState<boolean>(false);
   const [isRevealed, setIsRevealed] = useState(false);
   const [tradeOutcome, setTradeOutcome] = useState<'WIN' | 'LOSS' | 'SKIPPED' | null>(null);
   const [finalReturnROE, setFinalReturnROE] = useState<number>(0);
+  const [isDebriefDrawerOpen, setIsDebriefDrawerOpen] = useState<boolean>(false);
 
   // Indicators & Drawing Tools
   const [activeIndicators, setActiveIndicators] = useState<string[]>([
@@ -93,11 +99,17 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
   const [entryPrice, setEntryPrice] = useState<number>(scenario.entryPrice);
   const [stopLoss, setStopLoss] = useState<number>(scenario.suggestedStopLoss);
   const [takeProfit, setTakeProfit] = useState<number>(scenario.suggestedTakeProfit);
+  const [entryTimestamp, setEntryTimestamp] = useState<number | undefined>(undefined);
+  const [floatingROE, setFloatingROE] = useState<number | null>(null);
 
-  // Playback / Simulation State
+  // Simulation State Machine (Ref-backed for 60 FPS zero-lag closures)
   const [simIndex, setSimIndex] = useState<number>(0);
+  const simIndexRef = useRef<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
   const [simSpeed, setSimSpeed] = useState<number>(2); // candles per second
+  const simSpeedRef = useRef<number>(2);
+  simSpeedRef.current = simSpeed;
   const simTimerRef = useRef<any>(null);
 
   // Session Statistics
@@ -109,9 +121,50 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     totalR: 0,
   });
 
-  // Chart Container
+  // Chart Container & References
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<KLineChartInstance | null>(null);
+  const visibleBarsRef = useRef<KLineBar[]>([]);
+  const liveUpdateCallbackRef = useRef<((bar: KLineBar) => void) | null>(null);
+
+  // Sound effects with WebAudio API
+  const playSound = useCallback((type: 'win' | 'loss') => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      if (type === 'win') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+        osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.12); // E5
+        osc.frequency.setValueAtTime(783.99, audioCtx.currentTime + 0.24); // G5
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.5);
+      } else {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(329.63, audioCtx.currentTime); // E4
+        osc.frequency.setValueAtTime(261.63, audioCtx.currentTime + 0.15); // C4
+        gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.45);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.45);
+      }
+    } catch (e) {}
+  }, []);
+
+  const mapIntervalToPeriod = (intv: string): Period => {
+    if (intv.endsWith('s')) return { type: 'second', span: parseInt(intv) || 1 };
+    if (intv.endsWith('m')) return { type: 'minute', span: parseInt(intv) || 1 };
+    if (intv.endsWith('h')) return { type: 'hour', span: parseInt(intv) || 1 };
+    if (intv.endsWith('d') || intv.endsWith('D')) return { type: 'day', span: 1 };
+    if (intv.endsWith('w') || intv.endsWith('W')) return { type: 'week', span: 1 };
+    return { type: 'minute', span: 15 };
+  };
 
   // Synchronize indicators with KlineCharts
   const syncIndicators = useCallback((chart: KLineChartInstance, targetIndicators: string[]) => {
@@ -171,26 +224,12 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     if (bars.length > 30) setLiqResult(LiquidationHeatmapCalculator.calculate(bars.slice(-150)));
   }, []);
 
-  const visibleBarsRef = useRef<KLineBar[]>([]);
-  const liveUpdateCallbackRef = useRef<((bar: KLineBar) => void) | null>(null);
-
-  const mapIntervalToPeriod = (intv: string): Period => {
-    if (intv.endsWith('s')) return { type: 'second', span: parseInt(intv) || 1 };
-    if (intv.endsWith('m')) return { type: 'minute', span: parseInt(intv) || 1 };
-    if (intv.endsWith('h')) return { type: 'hour', span: parseInt(intv) || 1 };
-    if (intv.endsWith('d') || intv.endsWith('D')) return { type: 'day', span: 1 };
-    if (intv.endsWith('w') || intv.endsWith('W')) return { type: 'week', span: 1 };
-    return { type: 'minute', span: 15 };
-  };
-
-  // 1. Initialize Chart instance
+  // 1. Initialize Chart instance on mount
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    visibleBarsRef.current = [
-      ...scenario.contextBars,
-      ...scenario.futureBars.slice(0, simIndex),
-    ];
+    visibleBarsRef.current = [...scenario.contextBars];
+    simIndexRef.current = 0;
 
     const chart = init(chartContainerRef.current, {
       styles: {
@@ -265,31 +304,7 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     };
   }, []);
 
-  // 2. Refresh chart data whenever scenario, simIndex, or isRevealed changes
-  useEffect(() => {
-    const chart = chartInstanceRef.current;
-    if (!chart) return;
-
-    const visibleBars = [
-      ...scenario.contextBars,
-      ...scenario.futureBars.slice(0, simIndex),
-    ];
-    visibleBarsRef.current = visibleBars;
-
-    chart.setSymbol({
-      ticker: isRevealed ? scenario.realSymbol : 'CONFIDENTIAL',
-      pricePrecision: 2,
-      volumePrecision: 2,
-    });
-    chart.setPeriod(mapIntervalToPeriod(scenario.timeframe));
-    chart.resetData();
-    recalculateOverlays(visibleBars);
-    try {
-      chart.scrollToRealTime();
-    } catch (e) {}
-  }, [scenario, simIndex, isRevealed, recalculateOverlays]);
-
-  // 3. Sync indicators whenever activeIndicators changes
+  // Sync indicators whenever activeIndicators changes
   useEffect(() => {
     const chart = chartInstanceRef.current;
     if (!chart) return;
@@ -306,24 +321,97 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     }
   }, [activeDrawingTool]);
 
-  // Load a new scenario
-  const handleLoadNewScenario = (targetCategory?: 'scalp' | 'daytrade' | 'swing') => {
-    clearInterval(simTimerRef.current);
+  // Load a brand new scenario
+  const applyNewScenario = (newScen: ScenarioInfo) => {
+    if (simTimerRef.current) {
+      clearInterval(simTimerRef.current);
+      simTimerRef.current = null;
+    }
+    isPlayingRef.current = false;
     setIsPlaying(false);
+
+    simIndexRef.current = 0;
     setSimIndex(0);
     setIsRevealed(false);
     setTradeOutcome(null);
+    setFloatingROE(null);
+    setFinalReturnROE(0);
+    setIsDebriefDrawerOpen(false);
 
-    const cat = targetCategory || (categoryFilter === 'all' ? undefined : categoryFilter);
-    const newScen = ScenarioService.getRandomScenario(cat);
     setScenario(newScen);
     setDirection(null);
     setEntryPrice(newScen.entryPrice);
     setStopLoss(newScen.suggestedStopLoss);
     setTakeProfit(newScen.suggestedTakeProfit);
+    setEntryTimestamp(undefined);
+
+    visibleBarsRef.current = [...newScen.contextBars];
+
+    const chart = chartInstanceRef.current;
+    if (chart) {
+      chart.setSymbol({
+        ticker: 'CONFIDENTIAL',
+        pricePrecision: 2,
+        volumePrecision: 2,
+      });
+      chart.setPeriod(mapIntervalToPeriod(newScen.timeframe));
+      chart.resetData();
+      recalculateOverlays(visibleBarsRef.current);
+      try {
+        chart.scrollToRealTime();
+      } catch (e) {}
+    }
   };
 
-  // Change category filter
+  const handleLoadNewScenario = (targetCategory?: 'scalp' | 'daytrade' | 'swing') => {
+    const cat = targetCategory || (categoryFilter === 'all' ? undefined : categoryFilter);
+    const newScen = ScenarioService.getRandomScenario(cat);
+    applyNewScenario(newScen);
+  };
+
+  // Fetch real historical segment directly from Binance
+  const handleLoadRealBinance = async () => {
+    setIsLoadingReal(true);
+    const cat = categoryFilter === 'all' ? undefined : categoryFilter;
+    const realScen = await ScenarioService.fetchRandomBinanceScenario(cat);
+    setIsLoadingReal(false);
+
+    if (realScen) {
+      applyNewScenario(realScen);
+    } else {
+      // Fallback to offline curated scenario
+      handleLoadNewScenario();
+    }
+  };
+
+  // Reset current scenario back to start
+  const handleResetScenario = () => {
+    if (simTimerRef.current) {
+      clearInterval(simTimerRef.current);
+      simTimerRef.current = null;
+    }
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+
+    simIndexRef.current = 0;
+    setSimIndex(0);
+    setTradeOutcome(null);
+    setFloatingROE(null);
+    setIsRevealed(false);
+    setIsDebriefDrawerOpen(false);
+
+    visibleBarsRef.current = [...scenario.contextBars];
+    const chart = chartInstanceRef.current;
+    if (chart) {
+      chart.resetData();
+      recalculateOverlays(visibleBarsRef.current);
+      try {
+        chart.scrollToRealTime();
+      } catch (e) {}
+    }
+  };
+
+  // Category filter selection
   const handleSelectCategory = (cat: 'all' | 'scalp' | 'daytrade' | 'swing') => {
     setCategoryFilter(cat);
     handleLoadNewScenario(cat === 'all' ? undefined : cat);
@@ -332,27 +420,79 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
   // Switch Direction (LONG or SHORT)
   const handleSetDirection = (newDir: 'LONG' | 'SHORT') => {
     setDirection(newDir);
-    const entry = scenario.entryPrice;
-    const atr = scenario.atr > 0 ? scenario.atr : entry * 0.005;
+    setTradeOutcome(null);
+    setIsRevealed(false);
 
-    // Default R:R 1:3.0
+    // Entry price defaults to the current visible candle's close
+    const lastBar = visibleBarsRef.current[visibleBarsRef.current.length - 1];
+    const currentPrice = lastBar ? lastBar.close : scenario.entryPrice;
+    setEntryPrice(currentPrice);
+    setEntryTimestamp(lastBar ? lastBar.timestamp : undefined);
+
+    const atr = scenario.atr > 0 ? scenario.atr : currentPrice * 0.005;
+    const slDist = Math.max(currentPrice * 0.002, atr * 1.2);
+
     if (newDir === 'LONG') {
-      const slDist = Math.max(entry * 0.002, atr * 1.2);
-      setStopLoss(parseFloat((entry - slDist).toFixed(2)));
-      setTakeProfit(parseFloat((entry + slDist * 3.0).toFixed(2)));
+      setStopLoss(parseFloat((currentPrice - slDist).toFixed(2)));
+      setTakeProfit(parseFloat((currentPrice + slDist * 3.0).toFixed(2)));
     } else {
-      const slDist = Math.max(entry * 0.002, atr * 1.2);
-      setStopLoss(parseFloat((entry + slDist).toFixed(2)));
-      setTakeProfit(parseFloat((entry - slDist * 3.0).toFixed(2)));
+      setStopLoss(parseFloat((currentPrice + slDist).toFixed(2)));
+      setTakeProfit(parseFloat((currentPrice - slDist * 3.0).toFixed(2)));
+    }
+  };
+
+  // Adjust R:R Ratio dynamically (e.g. 1:1.5, 1:2, 1:3, 1:5)
+  const handleSetRRMultiplier = (rrMult: number) => {
+    if (!direction) return;
+    const slDist = Math.abs(entryPrice - stopLoss);
+    if (slDist <= 0) return;
+
+    if (direction === 'LONG') {
+      setTakeProfit(parseFloat((entryPrice + slDist * rrMult).toFixed(2)));
+    } else {
+      setTakeProfit(parseFloat((entryPrice - slDist * rrMult).toFixed(2)));
+    }
+  };
+
+  // Adjust Stop Loss distance presets
+  const handleSetSLPercent = (percent: number) => {
+    if (!direction) return;
+    const slDist = entryPrice * (percent / 100);
+    const rewardDist = Math.abs(takeProfit - entryPrice);
+    const currentRR = slDist > 0 ? rewardDist / slDist : 3.0;
+
+    if (direction === 'LONG') {
+      const newSl = parseFloat((entryPrice - slDist).toFixed(2));
+      setStopLoss(newSl);
+      setTakeProfit(parseFloat((entryPrice + slDist * currentRR).toFixed(2)));
+    } else {
+      const newSl = parseFloat((entryPrice + slDist).toFixed(2));
+      setStopLoss(newSl);
+      setTakeProfit(parseFloat((entryPrice - slDist * currentRR).toFixed(2)));
+    }
+  };
+
+  // Fine-tune nudge SL or TP
+  const handleNudge = (target: 'SL' | 'TP', deltaPercent: number) => {
+    const delta = entryPrice * (deltaPercent / 100);
+    if (target === 'SL') {
+      setStopLoss((prev) => parseFloat((prev + delta).toFixed(2)));
+    } else {
+      setTakeProfit((prev) => parseFloat((prev + delta).toFixed(2)));
     }
   };
 
   // Skip scenario
   const handleSkip = () => {
-    clearInterval(simTimerRef.current);
+    if (simTimerRef.current) {
+      clearInterval(simTimerRef.current);
+      simTimerRef.current = null;
+    }
+    isPlayingRef.current = false;
     setIsPlaying(false);
     setTradeOutcome('SKIPPED');
     setIsRevealed(true);
+    setIsDebriefDrawerOpen(true);
     setStats((prev) => ({
       ...prev,
       trades: prev.trades + 1,
@@ -360,24 +500,31 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
     }));
   };
 
-  // Evaluate single step or candle during simulation
-  const checkTradeConditions = useCallback(
-    (step: number) => {
+  // Evaluate trade conditions on single bar
+  const evaluateTradeOnBar = useCallback(
+    (bar: KLineBar, currentStep: number): boolean => {
       if (!direction) return false;
-      const futureBar = scenario.futureBars[step - 1];
-      if (!futureBar) return false;
 
       const slDist = Math.abs(entryPrice - stopLoss);
       const tpDist = Math.abs(takeProfit - entryPrice);
-      const rr = slDist > 0 ? tpDist / slDist : 3.0;
+      const rrRatio = slDist > 0 ? parseFloat((tpDist / slDist).toFixed(2)) : 3.0;
+
+      // Calculate live floating ROE
+      const pnlPct =
+        direction === 'LONG'
+          ? ((bar.close - entryPrice) / entryPrice) * 100
+          : ((entryPrice - bar.close) / entryPrice) * 100;
+      const curRoe = pnlPct * leverage;
+      setFloatingROE(curRoe);
 
       if (direction === 'LONG') {
-        // Did it hit Stop Loss?
-        if (futureBar.low <= stopLoss) {
+        // Hit Stop Loss?
+        if (bar.low <= stopLoss) {
           const roe = -((slDist / entryPrice) * 100 * leverage);
           setFinalReturnROE(roe);
           setTradeOutcome('LOSS');
           setIsRevealed(true);
+          playSound('loss');
           setStats((prev) => ({
             ...prev,
             trades: prev.trades + 1,
@@ -386,28 +533,31 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
           }));
           return true;
         }
-        // Did it hit Take Profit?
-        if (futureBar.high >= takeProfit) {
+
+        // Hit Take Profit?
+        if (bar.high >= takeProfit) {
           const roe = (tpDist / entryPrice) * 100 * leverage;
           setFinalReturnROE(roe);
           setTradeOutcome('WIN');
           setIsRevealed(true);
+          playSound('win');
           setStats((prev) => ({
             ...prev,
             trades: prev.trades + 1,
             wins: prev.wins + 1,
-            totalR: parseFloat((prev.totalR + rr).toFixed(2)),
+            totalR: parseFloat((prev.totalR + rrRatio).toFixed(2)),
           }));
           return true;
         }
       } else {
         // SHORT
-        // Did it hit Stop Loss?
-        if (futureBar.high >= stopLoss) {
+        // Hit Stop Loss?
+        if (bar.high >= stopLoss) {
           const roe = -((slDist / entryPrice) * 100 * leverage);
           setFinalReturnROE(roe);
           setTradeOutcome('LOSS');
           setIsRevealed(true);
+          playSound('loss');
           setStats((prev) => ({
             ...prev,
             trades: prev.trades + 1,
@@ -416,35 +566,32 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
           }));
           return true;
         }
-        // Did it hit Take Profit?
-        if (futureBar.low <= takeProfit) {
+
+        // Hit Take Profit?
+        if (bar.low <= takeProfit) {
           const roe = (tpDist / entryPrice) * 100 * leverage;
           setFinalReturnROE(roe);
           setTradeOutcome('WIN');
           setIsRevealed(true);
+          playSound('win');
           setStats((prev) => ({
             ...prev,
             trades: prev.trades + 1,
             wins: prev.wins + 1,
-            totalR: parseFloat((prev.totalR + rr).toFixed(2)),
+            totalR: parseFloat((prev.totalR + rrRatio).toFixed(2)),
           }));
           return true;
         }
       }
 
       // Reached the end of future bars without hitting either
-      if (step >= scenario.futureBars.length) {
-        const lastClose = futureBar.close;
-        const pnlPercent =
-          direction === 'LONG'
-            ? ((lastClose - entryPrice) / entryPrice) * 100
-            : ((entryPrice - lastClose) / entryPrice) * 100;
-        const roe = pnlPercent * leverage;
-        setFinalReturnROE(roe);
-        const isWin = pnlPercent > 0;
+      if (currentStep >= scenario.futureBars.length) {
+        const isWin = pnlPct > 0;
+        setFinalReturnROE(curRoe);
         setTradeOutcome(isWin ? 'WIN' : 'LOSS');
         setIsRevealed(true);
-        const earnedR = slDist > 0 ? Math.abs(lastClose - entryPrice) / slDist : 1;
+        if (isWin) playSound('win'); else playSound('loss');
+        const earnedR = slDist > 0 ? parseFloat((Math.abs(bar.close - entryPrice) / slDist).toFixed(2)) : 1;
         setStats((prev) => ({
           ...prev,
           trades: prev.trades + 1,
@@ -457,49 +604,156 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
 
       return false;
     },
-    [direction, entryPrice, stopLoss, takeProfit, leverage, scenario.futureBars]
+    [direction, entryPrice, stopLoss, takeProfit, leverage, scenario.futureBars.length, playSound]
   );
 
-  // Step 1 candle forward
-  const handleStepForward = useCallback(() => {
-    if (simIndex < scenario.futureBars.length) {
-      const nextIndex = simIndex + 1;
-      setSimIndex(nextIndex);
-      const isEnded = checkTradeConditions(nextIndex);
-      if (isEnded) {
+  // Core 1 Candle Forward Step (Ref-based, zero-stale closure)
+  const stepForwardCore = useCallback((): boolean => {
+    const totalFuture = scenario.futureBars.length;
+    if (simIndexRef.current >= totalFuture) {
+      if (simTimerRef.current) {
         clearInterval(simTimerRef.current);
-        setIsPlaying(false);
+        simTimerRef.current = null;
       }
-    } else {
-      clearInterval(simTimerRef.current);
+      isPlayingRef.current = false;
       setIsPlaying(false);
-    }
-  }, [simIndex, scenario.futureBars.length, checkTradeConditions]);
-
-  // Start continuous simulation playback
-  const handleTogglePlay = () => {
-    if (!direction) {
-      alert('Please select LONG or SHORT before simulating the trade!');
-      return;
+      return false;
     }
 
-    if (isPlaying) {
-      clearInterval(simTimerRef.current);
+    const nextBar = scenario.futureBars[simIndexRef.current];
+    simIndexRef.current += 1;
+    const currentSim = simIndexRef.current;
+    setSimIndex(currentSim);
+
+    // 1. Append candle to visible list
+    visibleBarsRef.current.push(nextBar);
+
+    // 2. Direct push to KlineCharts (60 FPS smooth rendering)
+    if (liveUpdateCallbackRef.current) {
+      liveUpdateCallbackRef.current(nextBar);
+    } else {
+      chartInstanceRef.current?.resetData();
+    }
+
+    // 3. Recalculate indicators
+    recalculateOverlays(visibleBarsRef.current);
+
+    // 4. Trade evaluation
+    if (direction && tradeOutcome === null) {
+      const ended = evaluateTradeOnBar(nextBar, currentSim);
+      if (ended) {
+        if (simTimerRef.current) {
+          clearInterval(simTimerRef.current);
+          simTimerRef.current = null;
+        }
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        return false;
+      }
+    }
+
+    return true;
+  }, [scenario.futureBars, direction, tradeOutcome, recalculateOverlays, evaluateTradeOnBar]);
+
+  // Step 1 Candle Backward
+  const stepBackwardCore = useCallback(() => {
+    if (simIndexRef.current <= 0) return;
+    simIndexRef.current -= 1;
+    const currentSim = simIndexRef.current;
+    setSimIndex(currentSim);
+
+    visibleBarsRef.current = [
+      ...scenario.contextBars,
+      ...scenario.futureBars.slice(0, currentSim),
+    ];
+
+    chartInstanceRef.current?.resetData();
+    recalculateOverlays(visibleBarsRef.current);
+  }, [scenario.contextBars, scenario.futureBars, recalculateOverlays]);
+
+  // Play / Pause Simulation Toggle
+  const handleTogglePlay = useCallback(() => {
+    if (isPlayingRef.current) {
+      if (simTimerRef.current) {
+        clearInterval(simTimerRef.current);
+        simTimerRef.current = null;
+      }
+      isPlayingRef.current = false;
       setIsPlaying(false);
     } else {
+      // If at end, rewind to start
+      if (simIndexRef.current >= scenario.futureBars.length) {
+        simIndexRef.current = 0;
+        setSimIndex(0);
+        visibleBarsRef.current = [...scenario.contextBars];
+        chartInstanceRef.current?.resetData();
+        setTradeOutcome(null);
+      }
+
+      isPlayingRef.current = true;
       setIsPlaying(true);
-      const intervalMs = Math.max(80, Math.floor(1000 / simSpeed));
+
+      const intervalMs = Math.max(50, Math.floor(1000 / simSpeedRef.current));
       simTimerRef.current = setInterval(() => {
-        handleStepForward();
+        stepForwardCore();
+      }, intervalMs);
+    }
+  }, [scenario.contextBars, scenario.futureBars.length, stepForwardCore]);
+
+  // Change simulation speed and update running timer
+  const handleSetSpeed = (newSpeed: number) => {
+    setSimSpeed(newSpeed);
+    simSpeedRef.current = newSpeed;
+    if (isPlayingRef.current) {
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
+      const intervalMs = Math.max(50, Math.floor(1000 / newSpeed));
+      simTimerRef.current = setInterval(() => {
+        stepForwardCore();
       }, intervalMs);
     }
   };
 
+  // Clean timer on unmount
   useEffect(() => {
-    return () => clearInterval(simTimerRef.current);
+    return () => {
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
+    };
   }, []);
 
-  // Compute live R:R and distance %
+  // Keyboard Shortcuts in Arena: Space = play/pause, Right = step forward, Left = step back, R = reset
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        stepForwardCore();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        stepBackwardCore();
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        handleResetScenario();
+      } else if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        handleLoadNewScenario();
+      } else if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleSetDirection('LONG');
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSetDirection('SHORT');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleTogglePlay, stepForwardCore, stepBackwardCore]);
+
+  // Compute live R:R and distance percentages
   const riskDist = Math.abs(entryPrice - stopLoss);
   const rewardDist = Math.abs(takeProfit - entryPrice);
   const currentRR = riskDist > 0 ? (rewardDist / riskDist).toFixed(2) : '0';
@@ -555,6 +809,17 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
 
         {/* Action Controls & Stats */}
         <div className="flex items-center gap-3">
+          {/* Real Binance Cut Loader */}
+          <button
+            onClick={handleLoadRealBinance}
+            disabled={isLoadingReal}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-xs font-semibold text-amber-300 border border-amber-500/30 transition-all hover:border-amber-400 disabled:opacity-50"
+            title="Load random real historical price action directly from Binance"
+          >
+            <Zap className={`w-3.5 h-3.5 text-amber-400 ${isLoadingReal ? 'animate-spin' : ''}`} />
+            {isLoadingReal ? 'Loading Real Market...' : '⚡ Real Binance Cut'}
+          </button>
+
           {/* Indicators Button */}
           <button
             onClick={() => setIndicatorsModalOpen(true)}
@@ -574,19 +839,19 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
           </button>
 
           {/* Session Score Card */}
-          <div className="flex items-center gap-2 bg-[#131722] border border-[#2a2e39] px-2.5 py-1 rounded text-xs">
+          <div className="flex items-center gap-2 bg-[#131722] border border-[#2a2e39] px-2.5 py-1 rounded text-xs font-mono">
             <Award className="w-4 h-4 text-amber-400" />
-            <span className="text-gray-400">P&L:</span>
+            <span className="text-gray-400 font-sans">P&L:</span>
             <span
-              className={`font-mono font-bold ${
+              className={`font-bold ${
                 stats.totalR >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}
             >
               {stats.totalR >= 0 ? `+${stats.totalR}R` : `${stats.totalR}R`}
             </span>
             <span className="text-gray-500">|</span>
-            <span className="text-gray-400">WR:</span>
-            <span className="font-mono font-semibold text-white">
+            <span className="text-gray-400 font-sans">WR:</span>
+            <span className="font-semibold text-white">
               {stats.trades > 0
                 ? `${Math.round((stats.wins / stats.trades) * 100)}%`
                 : '0%'}
@@ -658,66 +923,199 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
             stopLossPrice={stopLoss}
             takeProfitPrice={takeProfit}
             entryIndex={scenario.contextBars.length - 1}
-            entryTimestamp={scenario.contextBars[scenario.contextBars.length - 1]?.timestamp}
+            entryTimestamp={entryTimestamp}
           />
 
-          {/* Inflection Point Marker & Blind Badge */}
-          <div className="absolute top-3 left-16 z-20 flex items-center gap-2 bg-[#1e222d]/90 backdrop-blur border border-[#2a2e39] px-3 py-1.5 rounded-lg shadow-lg">
-            <Flame className="w-4 h-4 text-amber-400 animate-pulse" />
-            <div className="flex flex-col">
-              <span className="text-[11px] font-bold text-gray-200">
-                Decision Point (Inflection Zone)
-              </span>
-              <span className="text-[10px] text-gray-400">
-                Future is hidden • Formulate your edge & R:R
+          {/* Decision Point Marker & Progress Pill */}
+          <div className="absolute top-3 left-16 z-20 flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-[#1e222d]/90 backdrop-blur border border-[#2a2e39] px-3 py-1.5 rounded-lg shadow-lg">
+              <Flame className="w-4 h-4 text-amber-400 animate-pulse" />
+              <div className="flex flex-col">
+                <span className="text-[11px] font-bold text-gray-200">
+                  Inflection Zone
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  Step or simulate forward • Edge vs Risk
+                </span>
+              </div>
+            </div>
+
+            {/* Simulation Progress Pill */}
+            <div className="flex items-center gap-1.5 bg-[#1e222d]/90 backdrop-blur border border-[#2a2e39] px-2.5 py-1.5 rounded-lg text-xs font-mono">
+              <span className="text-gray-400">Bar:</span>
+              <span className="font-bold text-cyan-300">
+                {simIndex} / {scenario.futureBars.length}
               </span>
             </div>
+
+            {/* Live Floating PnL Pill (when position is active) */}
+            {direction && tradeOutcome === null && floatingROE !== null && (
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border backdrop-blur text-xs font-mono font-bold shadow-lg animate-in fade-in duration-150 ${
+                  floatingROE >= 0
+                    ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-400'
+                    : 'bg-rose-950/80 border-rose-500/50 text-rose-400'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full animate-ping ${
+                    floatingROE >= 0 ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`}
+                />
+                <span>
+                  Floating:{' '}
+                  {floatingROE >= 0
+                    ? `+${floatingROE.toFixed(1)}%`
+                    : `${floatingROE.toFixed(1)}%`}
+                </span>
+              </div>
+            )}
           </div>
+
+          {/* Non-intrusive Outcome HUD (Floating Card when Trade Resolves) */}
+          {tradeOutcome && (
+            <div className="absolute top-3 right-4 z-30 max-w-md bg-[#1e222d]/95 backdrop-blur-md border border-[#363c4e] rounded-xl p-4 shadow-2xl flex flex-col gap-3 animate-in slide-in-from-top-4 duration-200">
+              <div className="flex items-center justify-between border-b border-[#2a2e39] pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  {tradeOutcome === 'WIN' ? (
+                    <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg">
+                      <CheckCircle2 className="w-5 h-5" />
+                    </div>
+                  ) : tradeOutcome === 'LOSS' ? (
+                    <div className="p-1.5 bg-rose-500/20 text-rose-400 rounded-lg">
+                      <XCircle className="w-5 h-5" />
+                    </div>
+                  ) : (
+                    <div className="p-1.5 bg-gray-500/20 text-gray-400 rounded-lg">
+                      <HelpCircle className="w-5 h-5" />
+                    </div>
+                  )}
+                  <div>
+                    <span className="font-black text-sm text-white block">
+                      {tradeOutcome === 'WIN'
+                        ? 'TARGET HIT • WIN!'
+                        : tradeOutcome === 'LOSS'
+                        ? 'STOPPED OUT • LOSS'
+                        : 'SETUP SKIPPED'}
+                    </span>
+                    <span className="text-[11px] font-mono font-semibold text-gray-300">
+                      {tradeOutcome === 'WIN'
+                        ? `Realized: +${finalReturnROE.toFixed(1)}% ROE on ${leverage}x`
+                        : tradeOutcome === 'LOSS'
+                        ? `Capped: ${finalReturnROE.toFixed(1)}% ROE (-1.0R)`
+                        : 'No trade executed'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setIsDebriefDrawerOpen(!isDebriefDrawerOpen)}
+                    className="p-1.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-gray-300 hover:text-white transition-colors"
+                    title="Toggle structural debrief"
+                  >
+                    <Info className="w-4 h-4 text-cyan-400" />
+                  </button>
+                  <button
+                    onClick={() => setTradeOutcome(null)}
+                    className="p-1.5 rounded hover:bg-[#363c4e] text-gray-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Collapsible Debrief Details */}
+              {isDebriefDrawerOpen && (
+                <div className="flex flex-col gap-2 bg-[#131722] p-3 rounded border border-[#2a2e39] text-xs">
+                  <div className="flex items-center justify-between text-gray-400 text-[10px] uppercase font-bold font-mono">
+                    <span>{scenario.realSymbol}</span>
+                    <span>{scenario.realDate}</span>
+                  </div>
+                  <p className="text-gray-300 leading-relaxed text-[11px]">
+                    {scenario.debrief.outcomeExplanation}
+                  </p>
+                  <div className="pt-1.5 border-t border-[#2a2e39] text-[11px] text-cyan-300 italic">
+                    💡 {scenario.debrief.lessonLearned}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  onClick={handleResetScenario}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-xs font-semibold text-gray-300"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Try Again
+                </button>
+                <button
+                  onClick={() => handleLoadNewScenario()}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-bold shadow-md"
+                >
+                  Next Scenario
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* 3. Bottom Trader Decision & Execution Cockpit */}
-      <footer className="h-20 bg-[#1e222d] border-t border-[#2a2e39] px-6 flex items-center justify-between z-30">
+      <footer className="h-24 bg-[#1e222d] border-t border-[#2a2e39] px-6 flex items-center justify-between z-30">
         {/* Left: Direction Decision Buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={() => handleSetDirection('LONG')}
-            disabled={isRevealed || isPlaying}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md active:scale-95 ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md active:scale-95 ${
               direction === 'LONG'
                 ? 'bg-emerald-500 text-black ring-2 ring-emerald-300'
                 : 'bg-[#131722] text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/10'
             }`}
           >
             <TrendingUp className="w-4 h-4" />
-            LONG POSITION
+            LONG
           </button>
 
           <button
             onClick={() => handleSetDirection('SHORT')}
-            disabled={isRevealed || isPlaying}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md active:scale-95 ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-bold text-xs transition-all shadow-md active:scale-95 ${
               direction === 'SHORT'
                 ? 'bg-rose-500 text-white ring-2 ring-rose-300'
                 : 'bg-[#131722] text-rose-400 border border-rose-500/40 hover:bg-rose-500/10'
             }`}
           >
             <TrendingDown className="w-4 h-4" />
-            SHORT POSITION
+            SHORT
           </button>
+
+          {direction && (
+            <button
+              onClick={() => {
+                setDirection(null);
+                setTradeOutcome(null);
+                setFloatingROE(null);
+              }}
+              className="px-2.5 py-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-gray-400 hover:text-white text-xs font-medium"
+              title="Cancel / Close active setup"
+            >
+              Cancel Setup
+            </button>
+          )}
 
           <button
             onClick={handleSkip}
-            disabled={isRevealed || isPlaying}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-gray-300 text-xs font-semibold transition-colors"
+            className="flex items-center gap-1 px-2.5 py-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-gray-300 text-xs font-medium transition-colors"
           >
             <SkipForward className="w-3.5 h-3.5" />
-            SKIP (No Setup)
+            Skip
           </button>
         </div>
 
-        {/* Center: Leverage & Risk Management Calculator */}
-        <div className="flex items-center gap-6 bg-[#131722] px-4 py-2 rounded-lg border border-[#2a2e39]">
+        {/* Center: Leverage, Stop Loss, Take Profit & R:R Calculator */}
+        <div className="flex items-center gap-5 bg-[#131722] px-4 py-2 rounded-lg border border-[#2a2e39]">
           {/* Leverage Selector */}
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">
@@ -744,42 +1142,98 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
 
           {/* Stop Loss & Invalidation */}
           <div className="flex flex-col">
-            <span className="text-[10px] uppercase font-bold text-rose-400 tracking-wider flex items-center gap-1">
-              Stop Loss <span className="text-gray-500">(-{riskPercent}%)</span>
-            </span>
-            <input
-              type="number"
-              step="any"
-              value={stopLoss}
-              onChange={(e) => setStopLoss(parseFloat(e.target.value) || 0)}
-              disabled={isRevealed || isPlaying}
-              className="w-24 bg-[#1e222d] border border-[#2a2e39] text-white px-2 py-1 rounded text-xs font-mono font-bold focus:border-rose-400 outline-none"
-            />
+            <div className="flex items-center justify-between text-[10px] uppercase font-bold text-rose-400 tracking-wider">
+              <span>Stop Loss</span>
+              <span className="text-gray-400 font-mono">(-{riskPercent}%)</span>
+            </div>
+            <div className="flex items-center gap-1 mt-0.5">
+              <input
+                type="number"
+                step="any"
+                value={stopLoss}
+                onChange={(e) => setStopLoss(parseFloat(e.target.value) || 0)}
+                className="w-24 bg-[#1e222d] border border-[#2a2e39] text-white px-2 py-1 rounded text-xs font-mono font-bold focus:border-rose-400 outline-none"
+              />
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => handleNudge('SL', 0.1)}
+                  className="w-4 h-3 bg-[#2a2e39] hover:bg-[#363c4e] text-white text-[9px] flex items-center justify-center rounded"
+                >
+                  +
+                </button>
+                <button
+                  onClick={() => handleNudge('SL', -0.1)}
+                  className="w-4 h-3 bg-[#2a2e39] hover:bg-[#363c4e] text-white text-[9px] flex items-center justify-center rounded"
+                >
+                  -
+                </button>
+              </div>
+            </div>
+            {/* Quick SL Presets */}
+            <div className="flex gap-1 mt-1">
+              {[0.3, 0.8, 1.5].map((pct) => (
+                <button
+                  key={pct}
+                  onClick={() => handleSetSLPercent(pct)}
+                  className="text-[9px] font-mono px-1 py-0.2 rounded bg-[#2a2e39] text-gray-400 hover:text-white"
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Take Profit Target */}
           <div className="flex flex-col">
-            <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1">
-              Take Profit <span className="text-gray-500">(+{rewardPercent}%)</span>
-            </span>
-            <input
-              type="number"
-              step="any"
-              value={takeProfit}
-              onChange={(e) => setTakeProfit(parseFloat(e.target.value) || 0)}
-              disabled={isRevealed || isPlaying}
-              className="w-24 bg-[#1e222d] border border-[#2a2e39] text-white px-2 py-1 rounded text-xs font-mono font-bold focus:border-emerald-400 outline-none"
-            />
+            <div className="flex items-center justify-between text-[10px] uppercase font-bold text-emerald-400 tracking-wider">
+              <span>Take Profit</span>
+              <span className="text-gray-400 font-mono">(+{rewardPercent}%)</span>
+            </div>
+            <div className="flex items-center gap-1 mt-0.5">
+              <input
+                type="number"
+                step="any"
+                value={takeProfit}
+                onChange={(e) => setTakeProfit(parseFloat(e.target.value) || 0)}
+                className="w-24 bg-[#1e222d] border border-[#2a2e39] text-white px-2 py-1 rounded text-xs font-mono font-bold focus:border-emerald-400 outline-none"
+              />
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => handleNudge('TP', 0.1)}
+                  className="w-4 h-3 bg-[#2a2e39] hover:bg-[#363c4e] text-white text-[9px] flex items-center justify-center rounded"
+                >
+                  +
+                </button>
+                <button
+                  onClick={() => handleNudge('TP', -0.1)}
+                  className="w-4 h-3 bg-[#2a2e39] hover:bg-[#363c4e] text-white text-[9px] flex items-center justify-center rounded"
+                >
+                  -
+                </button>
+              </div>
+            </div>
+            {/* Quick R:R Presets */}
+            <div className="flex gap-1 mt-1">
+              {[1.5, 2, 3, 5].map((rr) => (
+                <button
+                  key={rr}
+                  onClick={() => handleSetRRMultiplier(rr)}
+                  className="text-[9px] font-mono px-1 py-0.2 rounded bg-[#2a2e39] text-gray-400 hover:text-white"
+                >
+                  1:{rr}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="h-8 w-[1px] bg-[#2a2e39]" />
 
-          {/* Risk to Reward Ratio & ROE */}
+          {/* Risk to Reward Ratio & ROE Display */}
           <div className="flex flex-col">
             <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">
               R:R Ratio
             </span>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 mt-0.5">
               <span
                 className={`font-mono text-sm font-black ${
                   parseFloat(currentRR) >= 2.0
@@ -800,25 +1254,25 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
 
         {/* Right: Simulation & Playback Engine Controls */}
         <div className="flex items-center gap-3">
-          {/* Step 1 Candle */}
+          {/* Step Backward 1 Candle */}
           <button
-            onClick={handleStepForward}
-            disabled={!direction || isRevealed}
+            onClick={stepBackwardCore}
+            disabled={simIndex === 0}
             className="p-2.5 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-white transition-colors disabled:opacity-40"
-            title="Step 1 Candle Forward"
+            title="Step 1 Candle Backward (Left Arrow)"
           >
-            <FastForward className="w-4 h-4 text-cyan-400" />
+            <SkipBack className="w-4 h-4 text-gray-300" />
           </button>
 
-          {/* Play / Simulate Button */}
+          {/* Play / Pause Button */}
           <button
             onClick={handleTogglePlay}
-            disabled={!direction || isRevealed}
-            className={`flex items-center gap-2 px-6 py-2.5 rounded-lg font-bold text-xs shadow-lg transition-all active:scale-95 disabled:opacity-40 ${
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs shadow-lg transition-all active:scale-95 ${
               isPlaying
                 ? 'bg-amber-500 hover:bg-amber-400 text-black'
                 : 'bg-cyan-500 hover:bg-cyan-400 text-black'
             }`}
+            title="Toggle Playback (Space)"
           >
             {isPlaying ? (
               <>
@@ -827,10 +1281,20 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
               </>
             ) : (
               <>
-                <Play className="w-4 h-4 fill-current" />
-                SIMULATE TRADE
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+                {direction ? 'SIMULATE TRADE' : 'PLAY CANDLES'}
               </>
             )}
+          </button>
+
+          {/* Step Forward 1 Candle */}
+          <button
+            onClick={stepForwardCore}
+            disabled={simIndex >= scenario.futureBars.length}
+            className="p-2.5 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-white transition-colors disabled:opacity-40"
+            title="Step 1 Candle Forward (Right Arrow)"
+          >
+            <FastForward className="w-4 h-4 text-cyan-400" />
           </button>
 
           {/* Speed Toggle */}
@@ -838,7 +1302,7 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
             {[1, 2, 5, 10].map((s) => (
               <button
                 key={s}
-                onClick={() => setSimSpeed(s)}
+                onClick={() => handleSetSpeed(s)}
                 className={`px-2 py-1 text-[11px] font-mono font-bold rounded ${
                   simSpeed === s
                     ? 'bg-[#363c4e] text-white'
@@ -849,105 +1313,19 @@ export const TradingArena: React.FC<TradingArenaProps> = ({ onBackToLobby }) => 
               </button>
             ))}
           </div>
+
+          {/* Reset Scenario Button */}
+          <button
+            onClick={handleResetScenario}
+            className="p-2.5 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-gray-300 hover:text-white transition-colors"
+            title="Reset scenario to beginning (R)"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
         </div>
       </footer>
 
-      {/* 4. Debrief & Outcome Reveal Modal */}
-      {isRevealed && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#1e222d] border border-[#2a2e39] rounded-xl max-w-xl w-full p-6 shadow-2xl flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200">
-            {/* Outcome Header Banner */}
-            <div className="flex items-center justify-between border-b border-[#2a2e39] pb-4">
-              <div className="flex items-center gap-3">
-                {tradeOutcome === 'WIN' ? (
-                  <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-xl">
-                    <CheckCircle2 className="w-8 h-8" />
-                  </div>
-                ) : tradeOutcome === 'LOSS' ? (
-                  <div className="p-3 bg-rose-500/20 text-rose-400 rounded-xl">
-                    <XCircle className="w-8 h-8" />
-                  </div>
-                ) : (
-                  <div className="p-3 bg-gray-500/20 text-gray-400 rounded-xl">
-                    <HelpCircle className="w-8 h-8" />
-                  </div>
-                )}
-                <div>
-                  <h2 className="text-xl font-black text-white">
-                    {tradeOutcome === 'WIN'
-                      ? 'TARGET HIT • WIN!'
-                      : tradeOutcome === 'LOSS'
-                      ? 'STOPPED OUT • LOSS'
-                      : 'SCENARIO SKIPPED'}
-                  </h2>
-                  <p className="text-xs text-gray-400">
-                    {tradeOutcome === 'WIN'
-                      ? `Execution successful. Realized ROE on ${leverage}x leverage: +${finalReturnROE.toFixed(1)}%`
-                      : tradeOutcome === 'LOSS'
-                      ? `Invalidation triggered. Loss strictly capped to 1.0R (${finalReturnROE.toFixed(1)}% ROE)`
-                      : 'No position taken. Preserving capital is part of mathematical edge.'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Revealed Reality */}
-            <div className="bg-[#131722] p-3.5 rounded-lg border border-[#2a2e39] flex items-center justify-between text-xs">
-              <div>
-                <span className="text-gray-400 block text-[10px] uppercase font-bold">
-                  Underlying Asset
-                </span>
-                <span className="text-sm font-bold text-white">
-                  {scenario.realSymbol} ({scenario.timeframe})
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-gray-400 block text-[10px] uppercase font-bold">
-                  Historical Timestamp
-                </span>
-                <span className="text-xs font-mono text-cyan-300">
-                  {scenario.realDate}
-                </span>
-              </div>
-            </div>
-
-            {/* Technical Analysis Debrief */}
-            <div className="flex flex-col gap-2 bg-[#131722] p-4 rounded-lg border border-[#2a2e39] text-xs">
-              <span className="font-bold text-amber-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                <ShieldAlert className="w-4 h-4" />
-                Structural Breakdown
-              </span>
-              <p className="text-gray-300 leading-relaxed font-medium">
-                {scenario.debrief.outcomeExplanation}
-              </p>
-              <div className="mt-2 pt-2 border-t border-[#2a2e39]">
-                <span className="text-[10px] uppercase font-bold text-gray-400 block">
-                  Core Lesson:
-                </span>
-                <p className="text-cyan-300 italic">{scenario.debrief.lessonLearned}</p>
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                onClick={() => setIsRevealed(false)}
-                className="px-4 py-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-xs font-semibold text-gray-300 transition-colors"
-              >
-                Review Chart
-              </button>
-              <button
-                onClick={() => handleLoadNewScenario()}
-                className="px-5 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-bold transition-all shadow-md active:scale-95"
-              >
-                Next Scenario ➡️
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 5. Indicators Modal */}
+      {/* 4. Indicators Modal */}
       <IndicatorsModal
         isOpen={indicatorsModalOpen}
         onClose={() => setIndicatorsModalOpen(false)}

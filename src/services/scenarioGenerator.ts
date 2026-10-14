@@ -41,22 +41,63 @@ export function calculateATR(bars: KLineBar[], period = 14): number {
   return slice.reduce((a, b) => a + b, 0) / slice.length;
 }
 
-// Procedural realistic bar generator based on technical price action templates
+// Procedural realistic bar generator with rich historical context baseline
 function generateRealisticBars(
   startPrice: number,
   timeframeMinutes: number,
   moves: Array<{
     candleCount: number;
-    trendBias: number; // e.g. +0.002 per candle
-    volatility: number; // e.g. 0.003
+    trendBias: number;
+    volatility: number;
     volumeMultiplier?: number;
-  }>
-): KLineBar[] {
+  }>,
+  baselineCycles = 3
+): { bars: KLineBar[]; baselineCount: number } {
   const bars: KLineBar[] = [];
   let currentPrice = startPrice;
-  let currentTime = Date.now() - 365 * 24 * 3600 * 1000; // 1 year ago base
+  let currentTime = Date.now() - 365 * 24 * 3600 * 1000;
   const stepMs = timeframeMinutes * 60 * 1000;
 
+  // 1. Generate 120+ candles of multi-swing background history so indicators & chart are full
+  const baseMoves = [
+    { candleCount: 35, trendBias: 0.0004, volatility: 0.0022, volumeMultiplier: 0.9 },
+    { candleCount: 45, trendBias: -0.0005, volatility: 0.0025, volumeMultiplier: 1.1 },
+    { candleCount: 40, trendBias: 0.0002, volatility: 0.0019, volumeMultiplier: 0.8 },
+  ];
+
+  let baselineCount = 0;
+  for (let c = 0; c < baselineCycles; c++) {
+    for (const bMove of baseMoves) {
+      for (let i = 0; i < bMove.candleCount; i++) {
+        currentTime += stepMs;
+        const open = currentPrice;
+        const rawDelta = (Math.random() - 0.49) * bMove.volatility + bMove.trendBias;
+        const close = Math.max(open * 0.5, open * (1 + rawDelta));
+        const wickHigh = Math.random() * bMove.volatility * open * 0.7;
+        const wickLow = Math.random() * bMove.volatility * open * 0.7;
+        const high = Math.max(open, close) + wickHigh;
+        const low = Math.min(open, close) - wickLow;
+        const baseVol = 150 * (open > 1000 ? 5 : 50);
+        const volume = (baseVol + Math.random() * baseVol * 0.8) * (bMove.volumeMultiplier || 1.0);
+        const takerBuy = volume * (close >= open ? 0.55 : 0.45);
+
+        bars.push({
+          timestamp: currentTime,
+          open: parseFloat(open.toFixed(2)),
+          high: parseFloat(high.toFixed(2)),
+          low: parseFloat(low.toFixed(2)),
+          close: parseFloat(close.toFixed(2)),
+          volume: parseFloat(volume.toFixed(2)),
+          turnover: parseFloat((volume * close).toFixed(2)),
+          takerBuyVolume: parseFloat(takerBuy.toFixed(2)),
+        });
+        currentPrice = close;
+        baselineCount++;
+      }
+    }
+  }
+
+  // 2. Tactical setup moves leading into the decision point and subsequent outcome
   for (const move of moves) {
     for (let i = 0; i < move.candleCount; i++) {
       currentTime += stepMs;
@@ -88,23 +129,23 @@ function generateRealisticBars(
     }
   }
 
-  return bars;
+  return { bars, baselineCount };
 }
 
 // 8 Curated Master Scenarios covering Scalping, Daytrading, and Swing trading
 export const CURATED_SCENARIOS: ScenarioInfo[] = [
   // 1. 5m Scalp - BTC SFP (Swing Failure Pattern) Liquidity Sweep into +OB
   (() => {
-    const bars = generateRealisticBars(64200, 5, [
-      { candleCount: 40, trendBias: -0.0003, volatility: 0.0018, volumeMultiplier: 0.8 }, // consolidation / downtrend
-      { candleCount: 15, trendBias: -0.0008, volatility: 0.0025, volumeMultiplier: 1.2 }, // sweep into low
-      { candleCount: 5, trendBias: 0.0012, volatility: 0.002, volumeMultiplier: 2.5 }, // displacement start (decision point)
-      { candleCount: 25, trendBias: 0.0006, volatility: 0.0022, volumeMultiplier: 1.8 }, // subsequent expansion +0.9%
-    ]);
-    const decisionIdx = 60;
+    const { bars, baselineCount } = generateRealisticBars(64200, 5, [
+      { candleCount: 40, trendBias: -0.0003, volatility: 0.0018, volumeMultiplier: 0.8 },
+      { candleCount: 15, trendBias: -0.0008, volatility: 0.0025, volumeMultiplier: 1.2 },
+      { candleCount: 5, trendBias: 0.0012, volatility: 0.002, volumeMultiplier: 2.5 },
+      { candleCount: 35, trendBias: 0.0007, volatility: 0.0022, volumeMultiplier: 1.8 },
+    ], 1); // 120 baseline bars
+    const decisionIdx = baselineCount + 60;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 - 0.0028)).toFixed(2)); // -0.28% SL below swept low
-    const tp = parseFloat((entry * (1 + 0.0095)).toFixed(2)); // +0.95% TP at buy-side liquidity
+    const sl = parseFloat((entry * (1 - 0.0028)).toFixed(2));
+    const tp = parseFloat((entry * (1 + 0.0095)).toFixed(2));
     return {
       id: 'scen-btc-5m-sfp',
       title: 'Scenario Alpha • 5m Scalp',
@@ -132,16 +173,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 2. 15m Daytrade - ETH Bearish Fair Value Gap (FVG) Retest
   (() => {
-    const bars = generateRealisticBars(3480, 15, [
-      { candleCount: 45, trendBias: 0.0004, volatility: 0.0025, volumeMultiplier: 0.9 }, // pump into premium
-      { candleCount: 15, trendBias: -0.0015, volatility: 0.0035, volumeMultiplier: 2.2 }, // impulsive drop creating FVG
-      { candleCount: 10, trendBias: 0.0009, volatility: 0.002, volumeMultiplier: 0.7 }, // weak retracement into FVG (decision)
-      { candleCount: 30, trendBias: -0.0011, volatility: 0.003, volumeMultiplier: 1.9 }, // selloff -2.1%
-    ]);
-    const decisionIdx = 70;
+    const { bars, baselineCount } = generateRealisticBars(3480, 15, [
+      { candleCount: 45, trendBias: 0.0004, volatility: 0.0025, volumeMultiplier: 0.9 },
+      { candleCount: 15, trendBias: -0.0015, volatility: 0.0035, volumeMultiplier: 2.2 },
+      { candleCount: 10, trendBias: 0.0009, volatility: 0.002, volumeMultiplier: 0.7 },
+      { candleCount: 35, trendBias: -0.0011, volatility: 0.003, volumeMultiplier: 1.9 },
+    ], 1);
+    const decisionIdx = baselineCount + 70;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 + 0.0055)).toFixed(2)); // +0.55% SL above FVG high
-    const tp = parseFloat((entry * (1 - 0.021)).toFixed(2)); // -2.1% TP at sell-side discount
+    const sl = parseFloat((entry * (1 + 0.0055)).toFixed(2));
+    const tp = parseFloat((entry * (1 - 0.021)).toFixed(2));
     return {
       id: 'scen-eth-15m-fvg',
       title: 'Scenario Beta • 15m Daytrade',
@@ -169,15 +210,15 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 3. 1m Scalp - SOL Compression Volatility Squeeze
   (() => {
-    const bars = generateRealisticBars(178.5, 1, [
-      { candleCount: 60, trendBias: 0.0001, volatility: 0.0008, volumeMultiplier: 0.5 }, // extreme tight compression
-      { candleCount: 10, trendBias: 0.0005, volatility: 0.0012, volumeMultiplier: 1.4 }, // pre-breakout nudge (decision)
-      { candleCount: 30, trendBias: 0.0009, volatility: 0.0018, volumeMultiplier: 2.8 }, // breakout explosion +0.72%
-    ]);
-    const decisionIdx = 70;
+    const { bars, baselineCount } = generateRealisticBars(178.5, 1, [
+      { candleCount: 60, trendBias: 0.0001, volatility: 0.0008, volumeMultiplier: 0.5 },
+      { candleCount: 10, trendBias: 0.0005, volatility: 0.0012, volumeMultiplier: 1.4 },
+      { candleCount: 40, trendBias: 0.0009, volatility: 0.0018, volumeMultiplier: 2.8 },
+    ], 1);
+    const decisionIdx = baselineCount + 70;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 - 0.0018)).toFixed(2)); // -0.18% SL
-    const tp = parseFloat((entry * (1 + 0.0068)).toFixed(2)); // +0.68% TP
+    const sl = parseFloat((entry * (1 - 0.0018)).toFixed(2));
+    const tp = parseFloat((entry * (1 + 0.0068)).toFixed(2));
     return {
       id: 'scen-sol-1m-squeeze',
       title: 'Scenario Gamma • 1m Scalp',
@@ -205,16 +246,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 4. 1h Daytrade - BTC WaveTrend Triple Bullish Divergence in Demand Zone
   (() => {
-    const bars = generateRealisticBars(58400, 60, [
-      { candleCount: 40, trendBias: -0.0008, volatility: 0.0035, volumeMultiplier: 1.2 }, // prolonged downtrend
-      { candleCount: 15, trendBias: -0.0004, volatility: 0.0028, volumeMultiplier: 0.9 }, // lower low with drying volume
-      { candleCount: 10, trendBias: 0.0003, volatility: 0.0025, volumeMultiplier: 1.1 }, // retest / confirmation (decision)
-      { candleCount: 35, trendBias: 0.0012, volatility: 0.004, volumeMultiplier: 2.1 }, // strong reversal rally +3.2%
-    ]);
-    const decisionIdx = 65;
+    const { bars, baselineCount } = generateRealisticBars(58400, 60, [
+      { candleCount: 40, trendBias: -0.0008, volatility: 0.0035, volumeMultiplier: 1.2 },
+      { candleCount: 15, trendBias: -0.0004, volatility: 0.0028, volumeMultiplier: 0.9 },
+      { candleCount: 10, trendBias: 0.0003, volatility: 0.0025, volumeMultiplier: 1.1 },
+      { candleCount: 40, trendBias: 0.0012, volatility: 0.004, volumeMultiplier: 2.1 },
+    ], 1);
+    const decisionIdx = baselineCount + 65;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 - 0.0085)).toFixed(2)); // -0.85% SL
-    const tp = parseFloat((entry * (1 + 0.032)).toFixed(2)); // +3.2% TP
+    const sl = parseFloat((entry * (1 - 0.0085)).toFixed(2));
+    const tp = parseFloat((entry * (1 + 0.032)).toFixed(2));
     return {
       id: 'scen-btc-1h-div',
       title: 'Scenario Delta • 1h Daytrade',
@@ -242,16 +283,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 5. 4h Swing - SOL POC Breakdown & Resistance Flip
   (() => {
-    const bars = generateRealisticBars(142.0, 240, [
-      { candleCount: 50, trendBias: 0.0002, volatility: 0.006, volumeMultiplier: 1.0 }, // wide distribution range
-      { candleCount: 15, trendBias: -0.0025, volatility: 0.008, volumeMultiplier: 2.2 }, // clean breakdown of Point of Control
-      { candleCount: 10, trendBias: 0.0012, volatility: 0.005, volumeMultiplier: 0.8 }, // corrective backtest of broken POC (decision)
-      { candleCount: 30, trendBias: -0.002, volatility: 0.007, volumeMultiplier: 1.8 }, // continuation drop -4.8%
-    ]);
-    const decisionIdx = 75;
+    const { bars, baselineCount } = generateRealisticBars(142.0, 240, [
+      { candleCount: 50, trendBias: 0.0002, volatility: 0.006, volumeMultiplier: 1.0 },
+      { candleCount: 15, trendBias: -0.0025, volatility: 0.008, volumeMultiplier: 2.2 },
+      { candleCount: 10, trendBias: 0.0012, volatility: 0.005, volumeMultiplier: 0.8 },
+      { candleCount: 35, trendBias: -0.002, volatility: 0.007, volumeMultiplier: 1.8 },
+    ], 1);
+    const decisionIdx = baselineCount + 75;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 + 0.014)).toFixed(2)); // +1.4% SL
-    const tp = parseFloat((entry * (1 - 0.048)).toFixed(2)); // -4.8% TP
+    const sl = parseFloat((entry * (1 + 0.014)).toFixed(2));
+    const tp = parseFloat((entry * (1 - 0.048)).toFixed(2));
     return {
       id: 'scen-sol-4h-poc',
       title: 'Scenario Epsilon • 4h Swing',
@@ -279,16 +320,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 6. 15m Daytrade - ETH Judas Swing at London Open
   (() => {
-    const bars = generateRealisticBars(3120, 15, [
-      { candleCount: 35, trendBias: 0.0001, volatility: 0.0015, volumeMultiplier: 0.6 }, // Asian Range consolidation
-      { candleCount: 10, trendBias: 0.0018, volatility: 0.003, volumeMultiplier: 2.0 }, // Judas Swing fakeout pump above Asian High
-      { candleCount: 5, trendBias: -0.0012, volatility: 0.0025, volumeMultiplier: 1.8 }, // rapid rejection back inside (decision)
-      { candleCount: 25, trendBias: -0.001, volatility: 0.003, volumeMultiplier: 1.6 }, // liquidation flush -1.75%
-    ]);
-    const decisionIdx = 50;
+    const { bars, baselineCount } = generateRealisticBars(3120, 15, [
+      { candleCount: 35, trendBias: 0.0001, volatility: 0.0015, volumeMultiplier: 0.6 },
+      { candleCount: 10, trendBias: 0.0018, volatility: 0.003, volumeMultiplier: 2.0 },
+      { candleCount: 5, trendBias: -0.0012, volatility: 0.0025, volumeMultiplier: 1.8 },
+      { candleCount: 35, trendBias: -0.001, volatility: 0.003, volumeMultiplier: 1.6 },
+    ], 1);
+    const decisionIdx = baselineCount + 50;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 + 0.0045)).toFixed(2)); // +0.45% SL
-    const tp = parseFloat((entry * (1 - 0.0175)).toFixed(2)); // -1.75% TP
+    const sl = parseFloat((entry * (1 + 0.0045)).toFixed(2));
+    const tp = parseFloat((entry * (1 - 0.0175)).toFixed(2));
     return {
       id: 'scen-eth-15m-judas',
       title: 'Scenario Zeta • 15m Daytrade',
@@ -316,16 +357,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 7. 5m Scalp - AVAX Equal Highs (EQH) Sweep
   (() => {
-    const bars = generateRealisticBars(38.2, 5, [
-      { candleCount: 45, trendBias: 0.0003, volatility: 0.0022, volumeMultiplier: 0.9 }, // building equal highs
-      { candleCount: 15, trendBias: 0.0015, volatility: 0.0032, volumeMultiplier: 2.4 }, // wick piercing EQH
-      { candleCount: 5, trendBias: -0.0008, volatility: 0.002, volumeMultiplier: 1.5 }, // bearish engulfing close (decision)
-      { candleCount: 25, trendBias: -0.0006, volatility: 0.0025, volumeMultiplier: 1.4 }, // downside flush -0.85%
-    ]);
-    const decisionIdx = 65;
+    const { bars, baselineCount } = generateRealisticBars(38.2, 5, [
+      { candleCount: 45, trendBias: 0.0003, volatility: 0.0022, volumeMultiplier: 0.9 },
+      { candleCount: 15, trendBias: 0.0015, volatility: 0.0032, volumeMultiplier: 2.4 },
+      { candleCount: 5, trendBias: -0.0008, volatility: 0.002, volumeMultiplier: 1.5 },
+      { candleCount: 35, trendBias: -0.0006, volatility: 0.0025, volumeMultiplier: 1.4 },
+    ], 1);
+    const decisionIdx = baselineCount + 65;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 + 0.0022)).toFixed(2)); // +0.22% SL
-    const tp = parseFloat((entry * (1 - 0.0085)).toFixed(2)); // -0.85% TP
+    const sl = parseFloat((entry * (1 + 0.0022)).toFixed(2));
+    const tp = parseFloat((entry * (1 - 0.0085)).toFixed(2));
     return {
       id: 'scen-avax-5m-eqh',
       title: 'Scenario Eta • 5m Scalp',
@@ -353,16 +394,16 @@ export const CURATED_SCENARIOS: ScenarioInfo[] = [
 
   // 8. 1D Macro Swing - BTC Daily Macro Order Block Re-accumulation
   (() => {
-    const bars = generateRealisticBars(41500, 1440, [
-      { candleCount: 60, trendBias: -0.0005, volatility: 0.008, volumeMultiplier: 1.1 }, // long multi-week correction
-      { candleCount: 15, trendBias: -0.0002, volatility: 0.005, volumeMultiplier: 0.7 }, // tapping daily +OB with volume dry-up
-      { candleCount: 10, trendBias: 0.0008, volatility: 0.006, volumeMultiplier: 1.4 }, // morning star candle cluster (decision)
-      { candleCount: 35, trendBias: 0.0016, volatility: 0.009, volumeMultiplier: 2.2 }, // macro expansion +12.5%
-    ]);
-    const decisionIdx = 85;
+    const { bars, baselineCount } = generateRealisticBars(41500, 1440, [
+      { candleCount: 60, trendBias: -0.0005, volatility: 0.008, volumeMultiplier: 1.1 },
+      { candleCount: 15, trendBias: -0.0002, volatility: 0.005, volumeMultiplier: 0.7 },
+      { candleCount: 10, trendBias: 0.0008, volatility: 0.006, volumeMultiplier: 1.4 },
+      { candleCount: 40, trendBias: 0.0016, volatility: 0.009, volumeMultiplier: 2.2 },
+    ], 1);
+    const decisionIdx = baselineCount + 85;
     const entry = bars[decisionIdx].close;
-    const sl = parseFloat((entry * (1 - 0.032)).toFixed(2)); // -3.2% SL below Daily OB low
-    const tp = parseFloat((entry * (1 + 0.125)).toFixed(2)); // +12.5% TP at macro swing high
+    const sl = parseFloat((entry * (1 - 0.032)).toFixed(2));
+    const tp = parseFloat((entry * (1 + 0.125)).toFixed(2));
     return {
       id: 'scen-btc-1d-ob',
       title: 'Scenario Theta • 1D Swing',
@@ -408,20 +449,31 @@ export class ScenarioService {
 
   // Attempt to fetch a live dynamic random historical scenario from Binance
   static async fetchRandomBinanceScenario(
-    symbol = 'BTCUSDT',
-    interval = '15m'
+    targetCategory?: 'scalp' | 'daytrade' | 'swing'
   ): Promise<ScenarioInfo | null> {
     try {
-      // Pick a random historical date between 1 year ago and 3 months ago
+      const symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT'];
+      const symbol = symbols[Math.floor(Math.random() * symbols.length)];
+
+      let interval = '15m';
+      if (targetCategory === 'scalp') {
+        interval = Math.random() > 0.5 ? '1m' : '5m';
+      } else if (targetCategory === 'swing') {
+        interval = Math.random() > 0.5 ? '4h' : '1d';
+      } else {
+        interval = Math.random() > 0.5 ? '15m' : '1h';
+      }
+
+      // Pick a random historical date between 3 months ago and 2 years ago
       const now = Date.now();
       const threeMonthsAgo = now - 90 * 24 * 3600 * 1000;
-      const oneYearAgo = now - 365 * 24 * 3600 * 1000;
-      const randomEndTime = Math.floor(oneYearAgo + Math.random() * (threeMonthsAgo - oneYearAgo));
+      const twoYearsAgo = now - 730 * 24 * 3600 * 1000;
+      const randomEndTime = Math.floor(twoYearsAgo + Math.random() * (threeMonthsAgo - twoYearsAgo));
 
-      const bars = await BinanceService.fetchKlines(symbol, interval, 200, randomEndTime);
-      if (!bars || bars.length < 120) return null;
+      const bars = await BinanceService.fetchKlines(symbol, interval, 400, randomEndTime);
+      if (!bars || bars.length < 200) return null;
 
-      // Decision point at 70% of the data
+      // Decision point at ~70% (280 context bars, 120 future bars)
       const decisionIndex = Math.floor(bars.length * 0.7);
       const contextBars = bars.slice(0, decisionIndex + 1);
       const futureBars = bars.slice(decisionIndex + 1);
@@ -434,21 +486,19 @@ export class ScenarioService {
       const minFuture = Math.min(...futureBars.map((b) => b.low));
       const upDelta = (maxFuture - entry) / entry;
       const downDelta = (entry - minFuture) / entry;
-
       const idealDirection: 'LONG' | 'SHORT' = upDelta >= downDelta ? 'LONG' : 'SHORT';
 
-      // Calibrate realistic SL & TP based on timeframe
       let slPercent = 0.005;
-      if (interval === '1m' || interval === '5m') slPercent = 0.0025;
-      else if (interval === '15m' || interval === '1h') slPercent = 0.005;
-      else slPercent = 0.015;
+      if (interval === '1m' || interval === '5m') slPercent = 0.003;
+      else if (interval === '15m' || interval === '1h') slPercent = 0.008;
+      else slPercent = 0.025;
 
       const sl =
         idealDirection === 'LONG'
           ? parseFloat((entry * (1 - slPercent)).toFixed(2))
           : parseFloat((entry * (1 + slPercent)).toFixed(2));
 
-      const tpPercent = slPercent * 3.0; // 1:3 R:R target
+      const tpPercent = slPercent * 3.0; // 1:3 R:R
       const tp =
         idealDirection === 'LONG'
           ? parseFloat((entry * (1 + tpPercent)).toFixed(2))
@@ -459,7 +509,7 @@ export class ScenarioService {
 
       return {
         id: `dyn-${symbol}-${interval}-${Date.now()}`,
-        title: `Dynamic Blind Scenario • ${interval}`,
+        title: `Real Market Cut • ${symbol} (${interval})`,
         timeframe: interval,
         category: interval === '1m' || interval === '5m' ? 'scalp' : interval === '1h' || interval === '15m' ? 'daytrade' : 'swing',
         realSymbol: symbol,
@@ -474,10 +524,10 @@ export class ScenarioService {
         suggestedTakeProfit: tp,
         idealDirection,
         debrief: {
-          marketContext: `Real historical market price action on ${symbol} (${interval}).`,
-          keyStructure: idealDirection === 'LONG' ? 'Bullish Expansion & Liquidity Influx' : 'Bearish Distribution & Imbalance Rejection',
-          outcomeExplanation: `Following the decision point, the price moved by ${(Math.max(upDelta, downDelta) * 100).toFixed(2)}% in the direction of the prevailing momentum.`,
-          lessonLearned: 'Trading with disciplined Risk-to-Reward and respecting structural invalidation levels protects capital against adverse market fluctuations.',
+          marketContext: `Actual historical exchange execution on ${symbol} (${interval}).`,
+          keyStructure: idealDirection === 'LONG' ? 'Bullish Expansion / Demand Reaction' : 'Bearish Breakdown / Supply Rejection',
+          outcomeExplanation: `Following this historical inflection point, ${symbol} moved by ${(Math.max(upDelta, downDelta) * 100).toFixed(2)}% in the direction of the dominant volume expansion.`,
+          lessonLearned: 'Trading with disciplined Stop Losses and mathematical Risk-to-Reward guarantees longevity in asymmetric crypto markets.',
         },
       };
     } catch (e) {
