@@ -124,6 +124,14 @@ export const AVAILABLE_INDICATORS: IndicatorItem[] = [
     isOverlay: true,
   },
   {
+    id: 'DAILY_SVP',
+    name: 'Daily Session Volume Profile (SVP / Auto Daily POC)',
+    shortName: 'Daily SVP',
+    category: 'Order Flow & Volume',
+    description: 'Automated daily volume distribution anchored to 00:00 UTC. Zero manual drawing: calculates daily POC, VAH, VAL for each day and projects Yesterday POC.',
+    isOverlay: true,
+  },
+  {
     id: 'CIPHER_A',
     name: 'Multi-EMA Momentum Ribbon (Cipher A style)',
     shortName: 'Cipher A',

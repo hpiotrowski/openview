@@ -22,6 +22,8 @@ import { HtfLevelsOverlay } from './HtfLevelsOverlay';
 import { NakedPocCalculator, NakedPocResult } from '../services/nakedPoc';
 import { NakedPocOverlay } from './NakedPocOverlay';
 import { FrvpOverlay } from './FrvpOverlay';
+import { SessionVolumeCalculator, SessionVolumeResult } from '../services/sessionVolume';
+import { SessionVolumeOverlay } from './SessionVolumeOverlay';
 import { ReplayEngine } from '../services/replayEngine';
 import { AVAILABLE_INDICATORS } from './IndicatorsModal';
 
@@ -242,6 +244,14 @@ export const Chart: React.FC<ChartProps> = ({
     }
   }, [frvpRange]);
 
+  // Daily Session Volume Profile (SVP / Auto Daily POC)
+  const [sessionVolumeResult, setSessionVolumeResult] = useState<SessionVolumeResult | null>(null);
+  const updateSessionVolume = useCallback((bars: KLineBar[]) => {
+    if (bars && bars.length > 20) {
+      setSessionVolumeResult(SessionVolumeCalculator.calculate(bars, 6));
+    }
+  }, []);
+
   // Helper to synchronize indicators cleanly with KlineCharts (no duplicates, clean removals)
   const syncIndicators = useCallback((chart: KLineChartInstance, targetIndicators: string[]) => {
     try {
@@ -279,6 +289,7 @@ export const Chart: React.FC<ChartProps> = ({
         'LIQUIDATION_HEATMAP',
         'HTF_LEVELS',
         'NAKED_POC',
+        'DAILY_SVP',
       ];
 
       targetIndicators.forEach((indName) => {
@@ -515,6 +526,7 @@ export const Chart: React.FC<ChartProps> = ({
             updateHtf(bars);
             updateNakedPoc(bars);
             updateFrvp(bars);
+            updateSessionVolume(bars);
             callback(bars);
             setLoading(false);
 
@@ -585,6 +597,7 @@ export const Chart: React.FC<ChartProps> = ({
                   updateHtf(currentBars);
                   updateNakedPoc(currentBars);
                   updateFrvp(currentBars);
+                  updateSessionVolume(currentBars);
                 }
               }
             },
@@ -622,6 +635,7 @@ export const Chart: React.FC<ChartProps> = ({
         updateHtf(event.bars);
         updateNakedPoc(event.bars);
         updateFrvp(event.bars);
+        updateSessionVolume(event.bars);
         if (event.currentBar && onPriceUpdate) {
           onPriceUpdate(event.currentBar.close);
         }
@@ -646,6 +660,7 @@ export const Chart: React.FC<ChartProps> = ({
         updateHtf(event.bars);
         updateNakedPoc(event.bars);
         updateFrvp(event.bars);
+        updateSessionVolume(event.bars);
       } else if (event.type === 'stop') {
         activeChart.resetData();
         const bars = rawBarsRef.current;
@@ -659,6 +674,7 @@ export const Chart: React.FC<ChartProps> = ({
         updateHtf(bars);
         updateNakedPoc(bars);
         updateFrvp(bars);
+        updateSessionVolume(bars);
         if (bars.length > 0 && onPriceUpdate) {
           onPriceUpdate(bars[bars.length - 1].close);
         }
@@ -678,6 +694,7 @@ export const Chart: React.FC<ChartProps> = ({
       updateHtf(visible);
       updateNakedPoc(visible);
       updateFrvp(visible);
+      updateSessionVolume(visible);
     }
 
     return () => {
@@ -697,6 +714,7 @@ export const Chart: React.FC<ChartProps> = ({
     updateHtf,
     updateNakedPoc,
     updateFrvp,
+    updateSessionVolume,
   ]);
 
   return (
@@ -779,6 +797,13 @@ export const Chart: React.FC<ChartProps> = ({
           setFrvpRange(null);
           setFrvpResult(null);
         }}
+      />
+
+      {/* Daily Session Volume Profile Overlay (Auto Daily POC, VAH, VAL) */}
+      <SessionVolumeOverlay
+        chart={chartInstanceRef.current}
+        sessionData={sessionVolumeResult}
+        visible={activeIndicators.includes('DAILY_SVP')}
       />
 
       {/* FRVP Anchor Prompt Banner */}
