@@ -17,27 +17,58 @@ interface ChartPanelConfig {
   interval: string;
 }
 
+import { StorageService } from './services/storage';
+
 export const App: React.FC = () => {
   // Navigation Mode
   const [mode, setMode] = useState<'lobby' | 'terminal' | 'arena'>('lobby');
 
   // Global settings
-  const [currentSymbol, setCurrentSymbol] = useState('BTCUSDT');
-  const [currentInterval, setCurrentInterval] = useState('15m');
-  const [chartType, setChartType] = useState<ChartType>('candle_solid');
+  const [currentSymbol, setCurrentSymbol] = useState(() => StorageService.getCurrentSymbol());
+  const [currentInterval, setCurrentInterval] = useState(() => StorageService.getCurrentInterval());
+  const [chartType, setChartType] = useState<ChartType>(() => StorageService.getChartType() as ChartType);
 
   // Drawing tools
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null);
   const [magnetEnabled, setMagnetEnabled] = useState(false);
+  const [clearDrawingsTrigger, setClearDrawingsTrigger] = useState(0);
 
   // Indicators & Overlays (Unlimited)
   const [indicatorsModalOpen, setIndicatorsModalOpen] = useState(false);
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(['VOL', 'EMA', 'VP']);
+  const [activeIndicators, setActiveIndicators] = useState<string[]>(() => StorageService.getActiveIndicators());
   const [volumeProfileEnabled, setVolumeProfileEnabled] = useState(true);
 
   // Grid Layout
-  const [gridLayout, setGridLayout] = useState<GridLayout>('1x1');
+  const [gridLayout, setGridLayout] = useState<GridLayout>(() => StorageService.getGridLayout() as GridLayout);
   const [activeChartId, setActiveChartId] = useState('chart-1');
+
+  // Watchlist Sidebar
+  const [watchlistOpen, setWatchlistOpen] = useState(() => StorageService.getWatchlistOpen());
+
+  // Sync state changes to localStorage
+  useEffect(() => {
+    StorageService.setActiveIndicators(activeIndicators);
+  }, [activeIndicators]);
+
+  useEffect(() => {
+    StorageService.setCurrentInterval(currentInterval);
+  }, [currentInterval]);
+
+  useEffect(() => {
+    StorageService.setCurrentSymbol(currentSymbol);
+  }, [currentSymbol]);
+
+  useEffect(() => {
+    StorageService.setChartType(chartType);
+  }, [chartType]);
+
+  useEffect(() => {
+    StorageService.setWatchlistOpen(watchlistOpen);
+  }, [watchlistOpen]);
+
+  useEffect(() => {
+    StorageService.setGridLayout(gridLayout);
+  }, [gridLayout]);
 
   // Multi-chart panels configuration
   const [panels, setPanels] = useState<ChartPanelConfig[]>([
@@ -63,9 +94,6 @@ export const App: React.FC = () => {
   // Alerts
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
-
-  // Watchlist Sidebar
-  const [watchlistOpen, setWatchlistOpen] = useState(true);
 
   // WebAudio Beep function for alerts
   const playAlertSound = () => {
@@ -299,7 +327,8 @@ export const App: React.FC = () => {
           activeTool={activeDrawingTool || 'cursor'}
           onSelectTool={(tool) => setActiveDrawingTool(tool)}
           onClearDrawings={() => {
-            // trigger clear
+            StorageService.clearDrawings(currentSymbol);
+            setClearDrawingsTrigger(Date.now());
           }}
           magnetEnabled={magnetEnabled}
           onToggleMagnet={() => setMagnetEnabled(!magnetEnabled)}
@@ -359,6 +388,7 @@ export const App: React.FC = () => {
                         : null
                     }
                     onPriceUpdate={isFocused ? handlePriceUpdate : undefined}
+                    clearDrawingsTrigger={clearDrawingsTrigger}
                   />
                 </div>
               );

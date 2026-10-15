@@ -14,6 +14,8 @@ import {
   GitCommit,
   SplitSquareHorizontal,
   BarChart2,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 
 export interface DrawingTool {
@@ -34,6 +36,8 @@ interface DrawingToolbarProps {
 
 export const DRAWING_TOOLS: DrawingTool[] = [
   { id: 'cursor', name: 'Cursor', icon: MousePointer, tooltip: 'Cursor (Pointer)' },
+  { id: 'longPosition', name: 'Long Position', icon: ArrowUpCircle, overlayName: 'longPosition', tooltip: 'Long Position (Click 1: Entry, 2: Target, 3: Stop)' },
+  { id: 'shortPosition', name: 'Short Position', icon: ArrowDownCircle, overlayName: 'shortPosition', tooltip: 'Short Position (Click 1: Entry, 2: Target, 3: Stop)' },
   { id: 'segment', name: 'Trend Line', icon: TrendingUp, overlayName: 'segment', tooltip: 'Trend Line' },
   { id: 'rayLine', name: 'Ray', icon: ArrowUpRight, overlayName: 'rayLine', tooltip: 'Ray' },
   { id: 'straightLine', name: 'Extended Line', icon: Minus, overlayName: 'straightLine', tooltip: 'Extended Line' },

@@ -26,6 +26,10 @@ import { SessionVolumeCalculator, SessionVolumeResult } from '../services/sessio
 import { SessionVolumeOverlay } from './SessionVolumeOverlay';
 import { ReplayEngine } from '../services/replayEngine';
 import { AVAILABLE_INDICATORS } from './IndicatorsModal';
+import { registerPositionOverlays } from '../services/positionOverlays';
+import { StorageService } from '../services/storage';
+
+registerPositionOverlays();
 
 interface ChartProps {
   id: string;
@@ -42,6 +46,7 @@ interface ChartProps {
   onCrosshairMove?: (crosshair: Crosshair, sourceId: string) => void;
   externalCrosshair?: Crosshair | null;
   onPriceUpdate?: (price: number) => void;
+  clearDrawingsTrigger?: number;
 }
 
 export const Chart: React.FC<ChartProps> = ({
@@ -59,6 +64,7 @@ export const Chart: React.FC<ChartProps> = ({
   onCrosshairMove,
   externalCrosshair,
   onPriceUpdate,
+  clearDrawingsTrigger,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<KLineChartInstance | null>(null);
@@ -477,18 +483,76 @@ export const Chart: React.FC<ChartProps> = ({
     }
   }, [chartType]);
 
-  // 4. Handle Active Drawing Tool
+  // 4. Debounced auto-save of drawings to localStorage
+  const saveTimeoutRef = useRef<any>(null);
+  const saveDrawingsDebounced = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      const chart = chartInstanceRef.current;
+      if (!chart) return;
+      const overlays = chart.getOverlays();
+      if (!overlays) return;
+      const serializable = overlays.map((o) => ({
+        name: o.name,
+        points: o.points,
+        styles: o.styles,
+        lock: o.lock,
+        extendData: o.extendData,
+      }));
+      StorageService.setDrawings(symbol, serializable);
+    }, 200);
+  }, [symbol]);
+
+  // Handle Active Drawing Tool
   useEffect(() => {
     const chart = chartInstanceRef.current;
     if (chart && activeDrawingTool && activeDrawingTool !== 'frvp') {
       try {
         chart.createOverlay(activeDrawingTool);
         if (onOverlayCreated) onOverlayCreated();
+        saveDrawingsDebounced();
       } catch (err) {
         console.warn('Error creating overlay:', err);
       }
     }
-  }, [activeDrawingTool, onOverlayCreated]);
+  }, [activeDrawingTool, onOverlayCreated, saveDrawingsDebounced]);
+
+  // Handle clearDrawingsTrigger
+  useEffect(() => {
+    if (!clearDrawingsTrigger) return;
+    const chart = chartInstanceRef.current;
+    if (chart) {
+      chart.removeOverlay();
+      StorageService.clearDrawings(symbol);
+      setFrvpRange(null);
+      setFrvpResult(null);
+    }
+  }, [clearDrawingsTrigger, symbol]);
+
+  // Save previous symbol drawings before symbol switch
+  const prevSymbolRef = useRef(symbol);
+  useEffect(() => {
+    if (prevSymbolRef.current && prevSymbolRef.current !== symbol) {
+      const chart = chartInstanceRef.current;
+      if (chart) {
+        const overlays = chart.getOverlays();
+        if (overlays) {
+          const serializable = overlays.map((o) => ({
+            name: o.name,
+            points: o.points,
+            styles: o.styles,
+            lock: o.lock,
+            extendData: o.extendData,
+          }));
+          StorageService.setDrawings(prevSymbolRef.current, serializable);
+        }
+        chart.removeOverlay();
+      }
+      prevSymbolRef.current = symbol;
+    }
+  }, [symbol]);
 
   // 5. Handle Indicators (UNLIMITED & SYNCHRONIZED)
   useEffect(() => {
@@ -529,6 +593,19 @@ export const Chart: React.FC<ChartProps> = ({
             updateSessionVolume(bars);
             callback(bars);
             setLoading(false);
+
+            // Restore saved drawings for this symbol
+            const savedDrawings = StorageService.getDrawings(symbol);
+            if (savedDrawings && savedDrawings.length > 0) {
+              chart.removeOverlay();
+              savedDrawings.forEach((d) => {
+                try {
+                  chart.createOverlay(d as any);
+                } catch (e) {
+                  console.warn('Failed to restore overlay:', e);
+                }
+              });
+            }
 
             if (bars.length > 0) {
               const lastBar = bars[bars.length - 1];
@@ -718,7 +795,7 @@ export const Chart: React.FC<ChartProps> = ({
   ]);
 
   return (
-    <div className="relative w-full h-full bg-[#131722] overflow-hidden">
+    <div className="relative w-full h-full bg-[#131722] overflow-hidden" onMouseUp={saveDrawingsDebounced}>
       {/* Chart Canvas Container */}
       <div ref={containerRef} className="w-full h-full" />
 
