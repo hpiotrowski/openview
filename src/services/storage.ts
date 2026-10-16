@@ -28,6 +28,7 @@ export interface SavedOverlay {
   styles?: any;
   lock?: boolean;
   extendData?: any;
+  symbol?: string;
 }
 
 export const StorageService = {
@@ -138,13 +139,33 @@ export const StorageService = {
   },
 
   // --- Drawings per Symbol ---
-  getDrawings(symbol: string): SavedOverlay[] {
+  getDrawings(symbol: string, currentPrice?: number): SavedOverlay[] {
     try {
       const key = `${STORAGE_KEYS.DRAWINGS_PREFIX}${symbol}`;
       const raw = localStorage.getItem(key);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+
+      if (typeof currentPrice === 'number' && currentPrice > 0) {
+        // Filter out any overlays that were accidentally saved with wildly mismatched prices (e.g. BTC prices $83,000 on LINK $12)
+        const sanitized = parsed.filter((item: SavedOverlay) => {
+          if (item.symbol && item.symbol !== symbol) return false;
+          if (!item.points || item.points.length === 0) return true;
+          const isOutlier = item.points.some((p) => {
+            if (typeof p.value !== 'number' || isNaN(p.value)) return false;
+            return p.value > currentPrice * 6 || p.value < currentPrice * 0.15;
+          });
+          return !isOutlier;
+        });
+
+        if (sanitized.length !== parsed.length) {
+          localStorage.setItem(key, JSON.stringify(sanitized));
+        }
+        return sanitized;
+      }
+
+      return parsed;
     } catch {
       return [];
     }

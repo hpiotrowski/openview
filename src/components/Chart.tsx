@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { init, dispose, Chart as KLineChartInstance, Crosshair, Period } from 'klinecharts';
-import { Clock, X } from 'lucide-react';
+import { Clock, X, Maximize2 } from 'lucide-react';
 import { BinanceService, KLineBar } from '../services/binance';
 import { ChartType } from './TopNavbar';
 import { VolumeProfileCalculator, VolumeProfileResult } from '../services/volumeProfile';
@@ -483,25 +483,45 @@ export const Chart: React.FC<ChartProps> = ({
     }
   }, [chartType]);
 
-  // 4. Debounced auto-save of drawings to localStorage
+  // 4. Track current symbol in ref to prevent stale closures
+  const symbolRef = useRef(symbol);
+  useEffect(() => {
+    symbolRef.current = symbol;
+  }, [symbol]);
+
+  // Debounced auto-save of drawings to localStorage (with price sanity filter)
   const saveTimeoutRef = useRef<any>(null);
   const saveDrawingsDebounced = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
+    const currentSaveSymbol = symbol;
     saveTimeoutRef.current = setTimeout(() => {
+      if (currentSaveSymbol !== symbolRef.current) return;
       const chart = chartInstanceRef.current;
       if (!chart) return;
       const overlays = chart.getOverlays();
       if (!overlays) return;
-      const serializable = overlays.map((o) => ({
-        name: o.name,
-        points: o.points,
-        styles: o.styles,
-        lock: o.lock,
-        extendData: o.extendData,
-      }));
-      StorageService.setDrawings(symbol, serializable);
+
+      const curPrice = lastPriceRef.current;
+      const serializable = overlays
+        .filter((o) => {
+          if (!curPrice || curPrice <= 0) return true;
+          return (o.points || []).every((p) => {
+            if (typeof p.value !== 'number' || isNaN(p.value)) return true;
+            return p.value <= curPrice * 6 && p.value >= curPrice * 0.15;
+          });
+        })
+        .map((o) => ({
+          name: o.name,
+          points: o.points,
+          styles: o.styles,
+          lock: o.lock,
+          extendData: o.extendData,
+          symbol: currentSaveSymbol,
+        }));
+
+      StorageService.setDrawings(currentSaveSymbol, serializable);
     }, 200);
   }, [symbol]);
 
@@ -531,28 +551,57 @@ export const Chart: React.FC<ChartProps> = ({
     }
   }, [clearDrawingsTrigger, symbol]);
 
-  // Save previous symbol drawings before symbol switch
+  // Handle symbol transition cleanly
   const prevSymbolRef = useRef(symbol);
   useEffect(() => {
-    if (prevSymbolRef.current && prevSymbolRef.current !== symbol) {
+    if (prevSymbolRef.current !== symbol) {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
       const chart = chartInstanceRef.current;
       if (chart) {
-        const overlays = chart.getOverlays();
-        if (overlays) {
-          const serializable = overlays.map((o) => ({
-            name: o.name,
-            points: o.points,
-            styles: o.styles,
-            lock: o.lock,
-            extendData: o.extendData,
-          }));
-          StorageService.setDrawings(prevSymbolRef.current, serializable);
-        }
         chart.removeOverlay();
+        chart.overrideYAxis({ paneId: 'candle_pane' });
       }
+      setSessionVolumeResult(null);
+      setZonesResult(null);
+      setSmcResult(null);
+      setCipherAResult(null);
+      setKillzonesResult(null);
+      setVwapResult(null);
+      setLiqResult(null);
+      setHtfResult(null);
+      setNakedPocResult(null);
+      setFrvpResult(null);
+      setFrvpRange(null);
+      rawBarsRef.current = [];
       prevSymbolRef.current = symbol;
     }
   }, [symbol]);
+
+  // 1-Click Auto-fit / Reset Chart Scale & Position
+  const handleResetView = useCallback(() => {
+    const chart = chartInstanceRef.current;
+    if (!chart) return;
+    const curPrice = lastPriceRef.current;
+    if (curPrice && curPrice > 0) {
+      const overlays = chart.getOverlays();
+      if (overlays && overlays.length > 0) {
+        overlays.forEach((o) => {
+          const hasRoguePoint = (o.points || []).some(
+            (p) => typeof p.value === 'number' && (p.value > curPrice * 6 || p.value < curPrice * 0.15)
+          );
+          if (hasRoguePoint && o.id) {
+            chart.removeOverlay({ id: o.id });
+          }
+        });
+      }
+    }
+    chart.overrideYAxis({ paneId: 'candle_pane' });
+    chart.scrollToRealTime(0);
+    chart.resize();
+  }, []);
 
   // 5. Handle Indicators (UNLIMITED & SYNCHRONIZED)
   useEffect(() => {
@@ -594,19 +643,6 @@ export const Chart: React.FC<ChartProps> = ({
             callback(bars);
             setLoading(false);
 
-            // Restore saved drawings for this symbol
-            const savedDrawings = StorageService.getDrawings(symbol);
-            if (savedDrawings && savedDrawings.length > 0) {
-              chart.removeOverlay();
-              savedDrawings.forEach((d) => {
-                try {
-                  chart.createOverlay(d as any);
-                } catch (e) {
-                  console.warn('Failed to restore overlay:', e);
-                }
-              });
-            }
-
             if (bars.length > 0) {
               const lastBar = bars[bars.length - 1];
               BinanceService.setActiveBar(id, lastBar);
@@ -615,6 +651,23 @@ export const Chart: React.FC<ChartProps> = ({
               if (onPriceUpdate) {
                 onPriceUpdate(lastBar.close);
               }
+
+              // Restore saved drawings for this symbol with strict price validation
+              const savedDrawings = StorageService.getDrawings(symbol, lastBar.close);
+              chart.removeOverlay();
+              if (savedDrawings && savedDrawings.length > 0) {
+                savedDrawings.forEach((d) => {
+                  try {
+                    chart.createOverlay(d as any);
+                  } catch (e) {
+                    console.warn('Failed to restore overlay:', e);
+                  }
+                });
+              }
+
+              // Ensure Y-axis is automatically scaled and candles are centered
+              chart.overrideYAxis({ paneId: 'candle_pane' });
+              chart.scrollToRealTime(0);
             }
           }
         } catch (err) {
@@ -795,7 +848,11 @@ export const Chart: React.FC<ChartProps> = ({
   ]);
 
   return (
-    <div className="relative w-full h-full bg-[#131722] overflow-hidden" onMouseUp={saveDrawingsDebounced}>
+    <div
+      className="relative w-full h-full bg-[#131722] overflow-hidden"
+      onMouseUp={saveDrawingsDebounced}
+      onDoubleClick={handleResetView}
+    >
       {/* Chart Canvas Container */}
       <div ref={containerRef} className="w-full h-full" />
 
@@ -980,6 +1037,16 @@ export const Chart: React.FC<ChartProps> = ({
           </span>
         </div>
       )}
+
+      {/* 1-Click Auto-Fit / Reset View Pill Button (TradingView style) */}
+      <button
+        onClick={handleResetView}
+        className="absolute bottom-3 right-16 z-20 flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded bg-[#1e222d]/90 hover:bg-[#2962ff] text-[#868993] hover:text-white border border-[#2a2e39] hover:border-[#2962ff] shadow-md transition-all backdrop-blur-xs select-none cursor-pointer group"
+        title="Auto-Fit Price Scale & Center Candles (Double-click chart also resets)"
+      >
+        <Maximize2 size={12} className="group-hover:scale-110 transition-transform" />
+        <span>Auto</span>
+      </button>
     </div>
   );
 };
