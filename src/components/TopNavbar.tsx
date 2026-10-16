@@ -16,6 +16,7 @@ import {
   PanelRight,
   Home,
   Flame,
+  Brain,
 } from 'lucide-react';
 import { POPULAR_SYMBOLS, TIMEFRAMES } from '../services/binance';
 
@@ -44,6 +45,9 @@ interface TopNavbarProps {
   onBackToLobby?: () => void;
   onOpenArena?: () => void;
   currentPrice?: number;
+  isAICopilotOpen?: boolean;
+  onToggleAICopilot?: () => void;
+  isSentinelActive?: boolean;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -68,6 +72,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onBackToLobby,
   onOpenArena,
   currentPrice,
+  isAICopilotOpen,
+  onToggleAICopilot,
+  isSentinelActive,
 }) => {
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
@@ -317,6 +324,36 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           <RotateCcw size={14} className={isReplaying ? 'text-[#f23645]' : 'text-[#868993]'} />
           <span className="font-medium">Replay</span>
         </button>
+
+        {/* AI Copilot Button */}
+        {onToggleAICopilot && (
+          <button
+            onClick={onToggleAICopilot}
+            className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded transition-all ${
+              isAICopilotOpen
+                ? 'bg-gradient-to-r from-[#2962ff] to-[#7c4dff] text-white font-bold shadow-md shadow-[#2962ff]/20'
+                : isSentinelActive
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold'
+                : 'bg-[#2a2e39]/70 hover:bg-[#2a2e39] text-[#d1d4dc] hover:text-white'
+            }`}
+            title="AI Copilot (Mózg Strategii + Jev Strażnik 1m)"
+          >
+            <Brain
+              size={14}
+              className={
+                isAICopilotOpen
+                  ? 'text-white'
+                  : isSentinelActive
+                  ? 'text-emerald-400 animate-pulse'
+                  : 'text-[#7c4dff]'
+              }
+            />
+            <span className="font-semibold text-xs">AI Copilot</span>
+            {isSentinelActive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            )}
+          </button>
+        )}
 
         {/* Layout Grid Selector */}
         <div className="relative">

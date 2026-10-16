@@ -28,6 +28,7 @@ import { ReplayEngine } from '../services/replayEngine';
 import { AVAILABLE_INDICATORS } from './IndicatorsModal';
 import { registerPositionOverlays } from '../services/positionOverlays';
 import { StorageService } from '../services/storage';
+import { chartRegistry } from '../services/chartRegistry';
 
 registerPositionOverlays();
 
@@ -538,6 +539,51 @@ export const Chart: React.FC<ChartProps> = ({
       }
     }
   }, [activeDrawingTool, onOverlayCreated, saveDrawingsDebounced]);
+
+  // Register this chart instance in chartRegistry for AI Copilot & auto-drawing
+  useEffect(() => {
+    chartRegistry.register(id, {
+      id,
+      symbol,
+      interval,
+      getContainer: () => containerRef.current,
+      getChart: () => chartInstanceRef.current,
+      getBars: () => rawBarsRef.current,
+      getSnapshotBase64: () =>
+        chartRegistry.takeCompositeSnapshot(containerRef.current, chartInstanceRef.current),
+      createPositionOverlay: ({ direction, entryPrice, takeProfit, stopLoss }) => {
+        const chart = chartInstanceRef.current;
+        if (!chart) return null;
+        const bars = rawBarsRef.current;
+        const lastBar = bars.length > 0 ? bars[bars.length - 1] : null;
+        const currentTs = lastBar ? lastBar.timestamp : Date.now();
+        const intervalMs = getIntervalMs(interval);
+        const targetTs = currentTs + intervalMs * 16;
+        const overlayName = direction === 'LONG' ? 'longPosition' : 'shortPosition';
+        try {
+          const res = chart.createOverlay({
+            name: overlayName,
+            points: [
+              { timestamp: currentTs, value: entryPrice },
+              { timestamp: targetTs, value: takeProfit },
+              { timestamp: targetTs, value: stopLoss },
+            ],
+          });
+          setTimeout(() => {
+            saveDrawingsDebounced();
+          }, 100);
+          return typeof res === 'string' ? res : 'created';
+        } catch (err) {
+          console.error('Failed to create AI position overlay:', err);
+          return null;
+        }
+      },
+    });
+
+    return () => {
+      chartRegistry.unregister(id);
+    };
+  }, [id, symbol, interval, saveDrawingsDebounced]);
 
   // Handle clearDrawingsTrigger
   useEffect(() => {

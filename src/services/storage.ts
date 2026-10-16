@@ -11,6 +11,11 @@ const STORAGE_KEYS = {
   WATCHLIST_OPEN: 'openview_watchlist_open',
   GRID_LAYOUT: 'openview_grid_layout',
   DRAWINGS_PREFIX: 'openview_drawings_',
+  OPENROUTER_API_KEY: 'openview_openrouter_api_key',
+  AI_BRAIN_MODEL: 'openview_ai_brain_model',
+  AI_JEV_MODEL: 'openview_ai_jev_model',
+  AI_SAVED_PLANS: 'openview_ai_saved_plans',
+  AI_AUTO_SENTINEL: 'openview_ai_auto_sentinel',
 };
 
 // Default setup: user's requested 3-indicator setup
@@ -186,6 +191,88 @@ export const StorageService = {
       localStorage.removeItem(key);
     } catch (err) {
       console.warn(`StorageService: failed to clear drawings for ${symbol}`, err);
+    }
+  },
+
+  // --- AI Copilot Settings ---
+  getOpenRouterKey(): string {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.OPENROUTER_API_KEY) || '';
+    } catch {
+      return '';
+    }
+  },
+
+  setOpenRouterKey(key: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.OPENROUTER_API_KEY, key);
+    } catch (err) {
+      console.warn('StorageService: failed to save OpenRouter key', err);
+    }
+  },
+
+  getBrainModel(): string {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.AI_BRAIN_MODEL) || 'claude-sonnet-4-5';
+    } catch {
+      return 'claude-sonnet-4-5';
+    }
+  },
+
+  setBrainModel(model: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.AI_BRAIN_MODEL, model);
+    } catch (err) {
+      console.warn('StorageService: failed to save Brain model', err);
+    }
+  },
+
+  getJevModel(): string {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.AI_JEV_MODEL) || 'jev-1.13-free';
+    } catch {
+      return 'jev-1.13-free';
+    }
+  },
+
+  setJevModel(model: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.AI_JEV_MODEL, model);
+    } catch (err) {
+      console.warn('StorageService: failed to save Jev model', err);
+    }
+  },
+
+  getSavedPlans(): any[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.AI_SAVED_PLANS);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  setSavedPlans(plans: any[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.AI_SAVED_PLANS, JSON.stringify(plans));
+    } catch (err) {
+      console.warn('StorageService: failed to save AI plans', err);
+    }
+  },
+
+  getAutoSentinel(): boolean {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.AI_AUTO_SENTINEL) === 'true';
+    } catch {
+      return false;
+    }
+  },
+
+  setAutoSentinel(enabled: boolean): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.AI_AUTO_SENTINEL, String(enabled));
+    } catch (err) {
+      console.warn('StorageService: failed to save Auto Sentinel flag', err);
     }
   },
 };

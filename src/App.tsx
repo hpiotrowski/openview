@@ -8,6 +8,7 @@ import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { AlertsModal, PriceAlert } from './components/AlertsModal';
 import { Lobby } from './components/Lobby';
 import { TradingArena } from './components/TradingArena';
+import { AICopilotDrawer } from './components/AICopilotDrawer';
 import { ReplayEngine } from './services/replayEngine';
 import { Crosshair } from 'klinecharts';
 
@@ -22,6 +23,10 @@ import { StorageService } from './services/storage';
 export const App: React.FC = () => {
   // Navigation Mode
   const [mode, setMode] = useState<'lobby' | 'terminal' | 'arena'>('lobby');
+
+  // AI Copilot Drawer & Sentinel state
+  const [aiCopilotOpen, setAiCopilotOpen] = useState(false);
+  const [isSentinelActive, setIsSentinelActive] = useState(() => StorageService.getAutoSentinel());
 
   // Global settings
   const [currentSymbol, setCurrentSymbol] = useState(() => StorageService.getCurrentSymbol());
@@ -318,6 +323,9 @@ export const App: React.FC = () => {
         onBackToLobby={() => setMode('lobby')}
         onOpenArena={() => setMode('arena')}
         currentPrice={currentBarPrice}
+        isAICopilotOpen={aiCopilotOpen}
+        onToggleAICopilot={() => setAiCopilotOpen(!aiCopilotOpen)}
+        isSentinelActive={isSentinelActive}
       />
 
       {/* Main Workspace: Left Drawing Toolbar + Central Chart Area + Right Watchlist */}
@@ -447,6 +455,16 @@ export const App: React.FC = () => {
           ]);
         }}
         onDeleteAlert={(id) => setAlerts(alerts.filter((a) => a.id !== id))}
+      />
+
+      {/* AI Copilot Drawer */}
+      <AICopilotDrawer
+        isOpen={aiCopilotOpen}
+        onClose={() => setAiCopilotOpen(false)}
+        activeChartId={activeChartId}
+        currentSymbol={currentSymbol}
+        currentInterval={currentInterval}
+        currentPrice={currentBarPrice}
       />
     </div>
   );
