@@ -137,6 +137,14 @@ export const JEV_MODEL_PRESETS = [
   { id: 'custom', name: 'Inny / Własny identyfikator...', isRecommended: false },
 ];
 
+export function cleanApiKey(rawKey: string): string {
+  if (!rawKey) return '';
+  let key = rawKey.trim();
+  key = key.replace(/^["']+|["']+$/g, '');
+  key = key.replace(/^Bearer\s+/i, '');
+  return key.trim();
+}
+
 function getHigherTimeframes(currentInterval: string): { macro: string; structure: string } {
   const norm = currentInterval.toLowerCase();
   if (norm.includes('s') || norm === '1m' || norm === '3m') {
@@ -418,8 +426,9 @@ class AITraderService {
   }): Promise<TradingPlan> {
     const { apiKey, model, snapshot } = params;
 
-    if (!apiKey) {
-      throw new Error('Brak klucza OpenRouter API Key. Wprowadź klucz w ustawieniach.');
+    const cleanKey = cleanApiKey(apiKey);
+    if (!cleanKey || cleanKey === 'undefined' || cleanKey === 'null') {
+      throw new Error('Klucz OpenRouter API Key jest pusty lub niepoprawny. Wklej swój klucz w zakładce Ustawienia (np. sk-or-v1-...).');
     }
 
     const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Order Blocks, Liquidity Sweeps, and Market Cipher B (WaveTrend & MFI).
@@ -528,7 +537,7 @@ Return strictly the JSON trade plan.`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey.trim()}`,
+        Authorization: `Bearer ${cleanKey}`,
         'HTTP-Referer': 'https://openview.local',
         'X-Title': 'OpenView Crypto AI Copilot',
       },
@@ -658,11 +667,16 @@ Respond ONLY with this exact JSON format without markdown fences:
   "urgency": "HIGH" | "MEDIUM" | "LOW"
 }`;
 
+    const cleanKey = cleanApiKey(apiKey);
+    if (!cleanKey || cleanKey === 'undefined' || cleanKey === 'null') {
+      throw new Error('Klucz OpenRouter API Key jest pusty lub niepoprawny.');
+    }
+
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey.trim()}`,
+        Authorization: `Bearer ${cleanKey}`,
         'HTTP-Referer': 'https://openview.local',
         'X-Title': 'OpenView Crypto Jev Sentinel',
       },
@@ -704,6 +718,41 @@ Respond ONLY with this exact JSON format without markdown fences:
     }
 
     return decision;
+  }
+
+  cleanApiKey(rawKey: string): string {
+    return cleanApiKey(rawKey);
+  }
+
+  /**
+   * Verify OpenRouter API key validity against official auth/key endpoint
+   */
+  async testApiKey(rawKey: string): Promise<{ ok: boolean; message: string }> {
+    const clean = cleanApiKey(rawKey);
+    if (!clean || clean === 'undefined' || clean === 'null') {
+      return { ok: false, message: 'Wprowadź klucz API (np. sk-or-v1-...)' };
+    }
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: {
+          Authorization: `Bearer ${clean}`,
+        },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const d = json.data;
+        const label = d?.label || 'Klucz aktywny';
+        const usage = typeof d?.usage === 'number' ? `$${d.usage.toFixed(2)}` : '$0.00';
+        const limit = d?.limit !== null && d?.limit !== undefined ? `$${d.limit}` : 'Bez limitu';
+        return { ok: true, message: `✅ Połączono! (${label} | Zużycie: ${usage} / Limit: ${limit})` };
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        const msg = errJson.error?.message || `Błąd autoryzacji (${res.status})`;
+        return { ok: false, message: `❌ ${msg}` };
+      }
+    } catch (e: any) {
+      return { ok: false, message: `❌ Błąd sieci: ${e.message}` };
+    }
   }
 
   /**

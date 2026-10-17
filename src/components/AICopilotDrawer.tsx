@@ -56,6 +56,28 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   const [customBrainModel, setCustomBrainModel] = useState('');
   const [jevModel, setJevModel] = useState(() => StorageService.getJevModel());
   const [customJevModel, setCustomJevModel] = useState('');
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handleApiKeyChange = (val: string) => {
+    const cleaned = aiTraderService.cleanApiKey(val);
+    setApiKey(cleaned);
+    StorageService.setOpenRouterKey(cleaned);
+    setTestResult(null);
+  };
+
+  const handleTestKey = async () => {
+    setIsTestingKey(true);
+    setTestResult(null);
+    try {
+      const res = await aiTraderService.testApiKey(apiKey);
+      setTestResult(res);
+    } catch (e: any) {
+      setTestResult({ ok: false, message: `Błąd: ${e.message}` });
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
 
   // Brain State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -742,7 +764,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                 <input
                   type={showApiKey ? 'text' : 'password'}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
                   placeholder="sk-or-v1-..."
                   className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white placeholder-[#868993] outline-none font-mono pr-10"
                 />
@@ -754,6 +776,35 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
+
+              {/* Test Button & Status */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleTestKey}
+                  disabled={isTestingKey || !apiKey.trim()}
+                  className="py-1 px-2.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-[11px] font-semibold text-white flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={isTestingKey ? 'animate-spin' : ''} />
+                  <span>{isTestingKey ? 'Sprawdzanie...' : '🔍 Przetestuj Klucz API'}</span>
+                </button>
+                <span className="text-[10px] text-[#868993]">
+                  Automatycznie usuwa zbędne "Bearer" i cudzysłowy.
+                </span>
+              </div>
+
+              {testResult && (
+                <div
+                  className={`p-2 rounded-lg text-xs font-medium border ${
+                    testResult.ok
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  {testResult.message}
+                </div>
+              )}
+
               <p className="text-[10px] text-[#868993] leading-relaxed">
                 Klucz przechowywany jest wyłącznie lokalnie w Twojej przeglądarce (<code className="text-[#2962ff]">localStorage</code>).
               </p>
