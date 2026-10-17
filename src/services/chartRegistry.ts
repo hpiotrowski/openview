@@ -1,4 +1,4 @@
-import { Nullable, Chart as KLineChartInstance, KLineData, init, dispose } from 'klinecharts';
+import { Nullable, Chart as KLineChartInstance, KLineData, Period, init, dispose } from 'klinecharts';
 
 export interface ChartController {
   id: string;
@@ -94,12 +94,27 @@ class ChartRegistryService {
   }
 
   /**
+   * Helper to map timeframe string to Klinecharts Period
+   */
+  mapIntervalToPeriod(intv: string): Period {
+    const s = (intv || '15m').toLowerCase();
+    if (s.endsWith('s')) return { type: 'second', span: parseInt(s) || 1 };
+    if (s.endsWith('m')) return { type: 'minute', span: parseInt(s) || 1 };
+    if (s.endsWith('h')) return { type: 'hour', span: parseInt(s) || 1 };
+    if (s.endsWith('d') || s.endsWith('D')) return { type: 'day', span: 1 };
+    if (s.endsWith('w') || s.endsWith('W')) return { type: 'week', span: 1 };
+    return { type: 'minute', span: 15 };
+  }
+
+  /**
    * Renders a clean, high-resolution chart of any timeframe (e.g. 15m or 4h)
    * in the background using an off-screen container without interrupting the user.
    */
   async renderBackgroundChartSnapshot(
     bars: KLineData[],
     options: {
+      symbol?: string;
+      interval?: string;
       includeCipherB?: boolean;
       includeVol?: boolean;
       barSpace?: number;
@@ -109,6 +124,8 @@ class ChartRegistryService {
     if (!bars || bars.length < 15) return null;
 
     const {
+      symbol = 'SNAPSHOT',
+      interval = '15m',
       includeCipherB = false,
       includeVol = true,
       barSpace = 9,
@@ -121,7 +138,7 @@ class ChartRegistryService {
     hiddenDiv.style.top = '-9999px';
     hiddenDiv.style.width = '1280px';
     hiddenDiv.style.height = includeCipherB ? '720px' : '600px';
-    hiddenDiv.style.visibility = 'hidden';
+    hiddenDiv.style.opacity = '0';
     hiddenDiv.style.pointerEvents = 'none';
     hiddenDiv.style.zIndex = '-9999';
     document.body.appendChild(hiddenDiv);
@@ -159,6 +176,16 @@ class ChartRegistryService {
         return null;
       }
 
+      // Klinecharts requires symbol and period to be initialized BEFORE data loading
+      chart.setSymbol({
+        ticker: symbol,
+        pricePrecision: 2,
+        volumePrecision: 2,
+      });
+
+      chart.setPeriod(this.mapIntervalToPeriod(interval));
+
+      // Connect data loader to supply bars
       chart.setDataLoader({
         getBars: ({ callback }) => {
           callback(bars as any);
@@ -174,10 +201,16 @@ class ChartRegistryService {
 
       chart.setBarSpace(barSpace);
       chart.setOffsetRightDistance(offsetRight);
+      chart.resize();
       chart.scrollToRealTime(0);
 
-      // Brief delay to allow canvas rendering pipeline
-      await new Promise((r) => setTimeout(r, 90));
+      // Brief delay to allow canvas layout and rendering pipeline
+      await new Promise((r) => setTimeout(r, 120));
+
+      const loadedCount = chart.getDataList().length;
+      if (loadedCount === 0) {
+        console.warn('Background chart has 0 bars loaded after setDataLoader!');
+      }
 
       const imgUrl = chart.getConvertPictureUrl(true, 'png', '#0c0d10');
 
@@ -186,7 +219,13 @@ class ChartRegistryService {
         document.body.removeChild(hiddenDiv);
       }
 
-      return imgUrl || null;
+      // Check if image is valid base64 and not an empty stub (< 4000 bytes)
+      if (!imgUrl || imgUrl.length < 4000) {
+        console.warn('Background chart snapshot was empty or too small:', imgUrl?.length);
+        return null;
+      }
+
+      return imgUrl;
     } catch (err) {
       console.warn('Failed to render background chart snapshot:', err);
       try {
@@ -204,9 +243,10 @@ class ChartRegistryService {
    */
   async renderBackgroundHTFSnapshot(
     bars: KLineData[],
-    _timeframe: string
+    timeframe: string
   ): Promise<string | null> {
     return this.renderBackgroundChartSnapshot(bars, {
+      interval: timeframe,
       includeVol: true,
       includeCipherB: false,
       barSpace: 10,

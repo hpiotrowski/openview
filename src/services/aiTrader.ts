@@ -404,9 +404,16 @@ class AITraderService {
 
         // Render off-screen HTF macro chart screenshot in the background
         try {
-          htfImageBase64 = await chartRegistry.renderBackgroundHTFSnapshot(
+          htfImageBase64 = await chartRegistry.renderBackgroundChartSnapshot(
             macroBars as any,
-            macro
+            {
+              symbol: controller.symbol,
+              interval: macro,
+              includeVol: true,
+              includeCipherB: false,
+              barSpace: 10,
+              offsetRight: 80,
+            }
           );
         } catch (renderErr) {
           console.warn('Background HTF chart render failed:', renderErr);
@@ -505,6 +512,8 @@ class AITraderService {
     let imageBase64: string | null = null;
     try {
       imageBase64 = await chartRegistry.renderBackgroundChartSnapshot(bars, {
+        symbol: controller.symbol,
+        interval: controller.interval,
         includeCipherB: true,
         includeVol: true,
         barSpace: 9,
@@ -513,7 +522,7 @@ class AITraderService {
     } catch (e) {
       console.warn('Background chart render failed, falling back to container snapshot:', e);
     }
-    if (!imageBase64) {
+    if (!imageBase64 || imageBase64.length < 4000) {
       imageBase64 = controller.getSnapshotBase64();
     }
 
@@ -622,9 +631,9 @@ class AITraderService {
     const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Cumulative Volume Delta (CVD & Smart Money Absorptions), Virgin/Naked POCs, Session Liquidity Sweeps (PDH/PDL, Monday Range), Liquidation Heatmap Clusters, and Market Cipher B (WaveTrend & MFI).
 
 Your objective:
-Analyze the provided multi-timeframe quantitative metrics, institutional order flow filters, AND the attached background-rendered chart screenshots for ${snapshot.symbol} (Execution on ${snapshot.interval}).
+Analyze the provided multi-timeframe quantitative metrics, institutional order flow filters, AND the attached background-rendered chart screenshots for ${snapshot.symbol} (Execution on ${snapshot.interval}, LIVE MARKET PRICE: $${snapshot.currentPrice}).
 Formulate a concrete, institutional trade setup with a minimum Risk:Reward of 1:2.5.
-If the market is currently chopping in no-man's land or has no high-probability edge, respond with direction: "NEUTRAL".
+If the market is currently chopping in no-man's land, sitting right on opposite support/demand, or has no high-probability edge from the current price, YOU MUST respond with direction: "NEUTRAL".
 
 TOP-DOWN MULTI-TIMEFRAME & INSTITUTIONAL RULES:
 1. Macro Alignment: Align execution with the Macro HTF regime. Do not fight strong higher-timeframe momentum unless playing a confirmed rejection or liquidity sweep at an HTF extreme.
@@ -632,12 +641,16 @@ TOP-DOWN MULTI-TIMEFRAME & INSTITUTIONAL RULES:
 3. Order Flow & CVD Divergences: Look for passive limit order absorption (e.g., Bullish CVD divergence where price forms lower lows or equal lows while CVD trends upwards, indicating aggressive spot/taker selling is being absorbed by smart money limit buys).
 4. Unmitigated Targets (Naked POCs & Liquidation Clusters): Use Virgin / Naked POCs and Liquidation Heatmap clusters (50x/100x leverage pools) as high-probability magnet targets for TP1 / TP2.
 5. Session Liquidity (PDH / PDL / Monday Range): Note if price has swept Previous Day High (PDH) or Previous Day Low (PDL) to hunt retail stops before reversing.
-6. If setup is actionable (LONG/SHORT):
-   - entryPrice must be a realistic price near key confluence on the execution timeframe (${snapshot.interval}) (e.g. Daily POC, Order Block, Demand/Supply, HTF sweep level).
-   - entryZone must be [min, max] bounding the entry trigger area.
-   - stopLoss must be placed beyond the invalidation level (below demand/OB for long, above supply/OB for short).
-   - takeProfit1 and takeProfit2 must target untapped liquidity pools, Naked POCs, Liquidation Clusters, HTF POC, or opposite VAH/VAL.
-   - riskRewardRatio must be calculated accurately as |TP1 - Entry| / |Entry - SL| and MUST be >= 2.5 (unless NEUTRAL).
+6. STRICT EXECUTION PROXIMITY & LOGICAL SANITY (MANDATORY):
+   - Current Live Price is $${snapshot.currentPrice}.
+   - Execution Proximity: entryPrice MUST be near the current live price (within 0.1% to 1.5% of $${snapshot.currentPrice}). NEVER propose a distant entry that is 3%-10% away while ignoring the current live price! If the nearest valid level is far away (>2%), you MUST choose "NEUTRAL".
+   - Direction & Targets Logic:
+     * For a SHORT: entryPrice can only be at or slightly above current price ($${snapshot.currentPrice} <= entryPrice <= $${Math.round(snapshot.currentPrice * 1.015 * 100) / 100}). StopLoss MUST be strictly > entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly < entryPrice AND STRICTLY < currentPrice ($${snapshot.currentPrice})! A short's take profit CAN NEVER be higher than the current market price!
+     * For a LONG: entryPrice can only be at or slightly below current price ($${Math.round(snapshot.currentPrice * 0.985 * 100) / 100} <= entryPrice <= $${snapshot.currentPrice}). StopLoss MUST be strictly < entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly > entryPrice AND STRICTLY > currentPrice ($${snapshot.currentPrice})! A long's take profit CAN NEVER be lower than the current market price!
+   - Support/Demand awareness:
+     * DO NOT open or propose a SHORT if price is currently sitting right on a DEMAND zone or if Cipher B is deeply oversold (WT1 <= -40 with blue wave curling up) — that is selling the bottom into smart money accumulation.
+     * DO NOT open or propose a LONG if price is currently hitting a major SUPPLY zone or if Cipher B is deeply overbought (WT1 >= +40).
+   - If conditions for a high-probability trade near the current price are not met, RETURN direction: "NEUTRAL". A NEUTRAL plan is the mark of a seasoned professional trader.
 7. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
 8. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
 
@@ -893,6 +906,35 @@ Return strictly the JSON trade plan.`,
       htfContext: snapshot.htfContext,
       appliedToChart: false,
     };
+
+    // Safety & Sanity Guard against hallucinated, distant, or illogical trade levels
+    if (plan.direction === 'SHORT') {
+      const isTpAboveCurrent = plan.setup.takeProfit1 >= snapshot.currentPrice;
+      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.025;
+      if (isTpAboveCurrent || isEntryTooFar) {
+        console.warn('AI generated an invalid or distant SHORT setup, falling back to NEUTRAL:', {
+          entry: plan.setup.entryPrice,
+          tp1: plan.setup.takeProfit1,
+          current: snapshot.currentPrice,
+        });
+        plan.direction = 'NEUTRAL';
+        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na strefę`;
+        plan.summary = `Bieżąca cena ($${snapshot.currentPrice}) znajduje się w strefie wsparcia/popytu lub zbyt daleko od oporu ($${plan.setup.entryPrice}). Cel TP ($${plan.setup.takeProfit1}) byłby nielogiczny dla pozycji krótkiej przy cenie rynkowej. AI zaleca cierpliwość.`;
+      }
+    } else if (plan.direction === 'LONG') {
+      const isTpBelowCurrent = plan.setup.takeProfit1 <= snapshot.currentPrice;
+      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.025;
+      if (isTpBelowCurrent || isEntryTooFar) {
+        console.warn('AI generated an invalid or distant LONG setup, falling back to NEUTRAL:', {
+          entry: plan.setup.entryPrice,
+          tp1: plan.setup.takeProfit1,
+          current: snapshot.currentPrice,
+        });
+        plan.direction = 'NEUTRAL';
+        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na strefę`;
+        plan.summary = `Bieżąca cena ($${snapshot.currentPrice}) znajduje się zbyt daleko od strefy popytu ($${plan.setup.entryPrice}) lub cel TP byłby poniżej ceny rynkowej. AI zaleca oczekiwanie na retest.`;
+      }
+    }
 
     return plan;
   }

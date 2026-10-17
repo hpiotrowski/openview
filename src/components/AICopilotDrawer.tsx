@@ -759,7 +759,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                         className="w-full h-full object-contain"
                       />
                       <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/75 text-white font-mono border border-white/10">
-                        {snapshotViewTab === 'htf' ? '🌐 Wykres Makro wygenerowany w tle' : '📸 Twój kadr z ekranu'}
+                        {snapshotViewTab === 'htf'
+                          ? `🌐 Wykres Makro (${capturedSnapshot?.htfContext?.macro.timeframe || '4h'}) w tle`
+                          : `⚡ Wykres Wykonawczy (${capturedSnapshot?.interval || '15m'}) w tle`}
                       </span>
                     </div>
                   </div>
