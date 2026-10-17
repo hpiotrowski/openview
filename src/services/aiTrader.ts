@@ -111,6 +111,7 @@ export interface MarketSnapshot {
     structure: HTFAnalysis;
   };
   imageBase64: string | null;
+  htfImageBase64?: string | null;
 }
 
 export interface AISettings {
@@ -354,6 +355,7 @@ class AITraderService {
 
     // Background fetch of Multi-Timeframe data (e.g. 4h Macro & 1h Structure)
     let htfContext: { macro: HTFAnalysis; structure: HTFAnalysis } | undefined = undefined;
+    let htfImageBase64: string | null = null;
     if (fetchHTF) {
       try {
         const { macro, structure } = getHigherTimeframes(controller.interval);
@@ -370,6 +372,16 @@ class AITraderService {
             macro: macroAnalysis,
             structure: structAnalysis,
           };
+        }
+
+        // Render off-screen HTF macro chart screenshot in the background
+        try {
+          htfImageBase64 = await chartRegistry.renderBackgroundHTFSnapshot(
+            macroBars as any,
+            macro
+          );
+        } catch (renderErr) {
+          console.warn('Background HTF chart render failed:', renderErr);
         }
       } catch (err) {
         console.warn('Failed to fetch background HTF context from Binance:', err);
@@ -482,6 +494,7 @@ class AITraderService {
       supplyDemand: sdSummary,
       htfContext,
       imageBase64,
+      htfImageBase64,
     };
   }
 
@@ -593,7 +606,24 @@ Return strictly the JSON trade plan.`,
       },
     ];
 
+    if (snapshot.htfImageBase64) {
+      userMessageContent.push({
+        type: 'text',
+        text: `Attached Image 1: Higher Timeframe Macro Chart (${snapshot.htfContext?.macro.timeframe || '4h'}) rendered in background (showing macro candle structure, swings, and volume context):`,
+      });
+      userMessageContent.push({
+        type: 'image_url',
+        image_url: {
+          url: snapshot.htfImageBase64,
+        },
+      });
+    }
+
     if (snapshot.imageBase64) {
+      userMessageContent.push({
+        type: 'text',
+        text: `Attached Image ${snapshot.htfImageBase64 ? '2' : '1'}: Execution Timeframe Chart (${snapshot.interval}) from user screen (showing exact candle anatomy, wicks, zones, and Cipher B wave slope):`,
+      });
       userMessageContent.push({
         type: 'image_url',
         image_url: {
@@ -884,6 +914,16 @@ Respond ONLY with this exact JSON format without markdown fences:
     });
 
     return !!res;
+  }
+
+  /**
+   * Optimizes chart view for AI analysis: sets ideal zoom (~85 bars), right margin and scrolls to live candle.
+   */
+  autoFrameActiveChart(chartId?: string): boolean {
+    const controller = chartRegistry.getActive(chartId);
+    if (!controller || !controller.autoFrameForAI) return false;
+    controller.autoFrameForAI();
+    return true;
   }
 
   /**

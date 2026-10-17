@@ -551,6 +551,17 @@ export const Chart: React.FC<ChartProps> = ({
       getBars: () => rawBarsRef.current,
       getSnapshotBase64: () =>
         chartRegistry.takeCompositeSnapshot(containerRef.current, chartInstanceRef.current),
+      autoFrameForAI: () => {
+        const chart = chartInstanceRef.current;
+        if (!chart) return;
+        try {
+          chart.setBarSpace(9);
+          chart.setOffsetRightDistance(90);
+          chart.scrollToRealTime(0);
+        } catch (e) {
+          console.warn('Auto frame chart for AI failed:', e);
+        }
+      },
       createPositionOverlay: ({ direction, entryPrice, takeProfit, stopLoss }) => {
         const chart = chartInstanceRef.current;
         if (!chart) return null;

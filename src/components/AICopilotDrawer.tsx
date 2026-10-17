@@ -123,8 +123,10 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
     return plans.length > 0 ? plans[0] : null;
   });
   const [capturedSnapshot, setCapturedSnapshot] = useState<MarketSnapshot | null>(null);
+  const [snapshotViewTab, setSnapshotViewTab] = useState<'exec' | 'htf'>('exec');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [appliedToast, setAppliedToast] = useState(false);
+  const [autoFrameToast, setAutoFrameToast] = useState(false);
 
   // Sentinel State
   const [sentinelEnabled, setSentinelEnabled] = useState(() => StorageService.getAutoSentinel());
@@ -154,9 +156,13 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       return;
     }
 
+    // Auto-frame chart before capture so the screenshot is framed with optimal zoom & margin
+    aiTraderService.autoFrameActiveChart(activeChartId);
+    await new Promise((r) => setTimeout(r, 80));
+
     setIsAnalyzing(true);
     setErrorMsg(null);
-    setAnalysisStep('1. Zbieranie zrzutu ekranu & danych MTF (4h + 1h w tle)...');
+    setAnalysisStep('1. Auto-kadr, zrzut ekranu & renderowanie 4h w tle...');
 
     try {
       const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, true);
@@ -396,6 +402,32 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
               </span>
             </div>
 
+            {/* Auto-Frame Button */}
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const ok = aiTraderService.autoFrameActiveChart(activeChartId);
+                  if (ok) {
+                    setAutoFrameToast(true);
+                    setTimeout(() => setAutoFrameToast(false), 2200);
+                  }
+                }}
+                className="w-full py-2 px-3 rounded-lg bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 text-xs font-semibold text-white flex items-center justify-center gap-2 transition-all shadow-sm"
+                title="Automatycznie ustawia idealne przybliżenie (~85 świec), prawy margines i centruje na bieżącej cenie"
+              >
+                <Target size={14} className="text-[#2962ff]" />
+                <span>🎯 Dopasuj Kadr dla AI (Auto-Zoom)</span>
+              </button>
+
+              {autoFrameToast && (
+                <div className="p-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] flex items-center justify-center gap-1.5 animate-in fade-in">
+                  <CheckCircle2 size={13} className="text-emerald-400" />
+                  <span>Kadr dopasowany (~85 świec + margines prawy)!</span>
+                </div>
+              )}
+            </div>
+
             {/* Plan Generation Button */}
             <button
               onClick={handleGeneratePlan}
@@ -600,18 +632,54 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   </div>
                 </div>
 
-                {/* Screenshot Preview */}
-                {capturedSnapshot?.imageBase64 && (
+                {/* Screenshot Preview with Multi-Timeframe Tabs */}
+                {(capturedSnapshot?.imageBase64 || capturedSnapshot?.htfImageBase64) && (
                   <div className="p-3 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-2">
-                    <span className="text-[11px] font-semibold text-[#868993] block">
-                      Zrzut wykresu użyty do analizy wizualnej:
-                    </span>
-                    <div className="rounded-lg overflow-hidden border border-[#2a2e39] aspect-video bg-[#0c0d10]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-[#868993] block">
+                        Zrzuty przesłane do AI:
+                      </span>
+                      {capturedSnapshot?.htfImageBase64 && (
+                        <div className="flex items-center gap-1 bg-[#161a25] p-0.5 rounded-lg border border-[#2a2e39] text-[10px]">
+                          <button
+                            type="button"
+                            onClick={() => setSnapshotViewTab('exec')}
+                            className={`px-2 py-0.5 rounded font-semibold transition-colors ${
+                              snapshotViewTab === 'exec'
+                                ? 'bg-[#2962ff] text-white'
+                                : 'text-[#868993] hover:text-white'
+                            }`}
+                          >
+                            Wykonawczy ({capturedSnapshot.interval})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSnapshotViewTab('htf')}
+                            className={`px-2 py-0.5 rounded font-semibold transition-colors ${
+                              snapshotViewTab === 'htf'
+                                ? 'bg-[#7c4dff] text-white'
+                                : 'text-[#868993] hover:text-white'
+                            }`}
+                          >
+                            Makro ({capturedSnapshot.htfContext?.macro.timeframe || '4h'} w tle)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg overflow-hidden border border-[#2a2e39] aspect-video bg-[#0c0d10] relative">
                       <img
-                        src={capturedSnapshot.imageBase64}
+                        src={
+                          snapshotViewTab === 'htf' && capturedSnapshot?.htfImageBase64
+                            ? capturedSnapshot.htfImageBase64
+                            : capturedSnapshot?.imageBase64 || ''
+                        }
                         alt="Chart snapshot"
                         className="w-full h-full object-contain"
                       />
+                      <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/75 text-white font-mono border border-white/10">
+                        {snapshotViewTab === 'htf' ? '🌐 Wykres Makro wygenerowany w tle' : '📸 Twój kadr z ekranu'}
+                      </span>
                     </div>
                   </div>
                 )}

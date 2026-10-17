@@ -1,4 +1,4 @@
-import { Nullable, Chart as KLineChartInstance, KLineData } from 'klinecharts';
+import { Nullable, Chart as KLineChartInstance, KLineData, init, dispose } from 'klinecharts';
 
 export interface ChartController {
   id: string;
@@ -8,6 +8,7 @@ export interface ChartController {
   getChart: () => Nullable<KLineChartInstance>;
   getBars: () => KLineData[];
   getSnapshotBase64: () => string | null;
+  autoFrameForAI?: () => void;
   createPositionOverlay: (params: {
     direction: 'LONG' | 'SHORT';
     entryPrice: number;
@@ -91,6 +92,94 @@ class ChartRegistryService {
 
     return null;
   }
+
+  /**
+   * Renders a clean, high-resolution chart of a higher timeframe (e.g. 4h / 1h)
+   * in the background using an off-screen container without interrupting the user.
+   */
+  async renderBackgroundHTFSnapshot(
+    bars: KLineData[],
+    _timeframe: string
+  ): Promise<string | null> {
+    if (!bars || bars.length < 15) return null;
+
+    const hiddenDiv = document.createElement('div');
+    hiddenDiv.style.position = 'fixed';
+    hiddenDiv.style.left = '-9999px';
+    hiddenDiv.style.top = '-9999px';
+    hiddenDiv.style.width = '1200px';
+    hiddenDiv.style.height = '600px';
+    hiddenDiv.style.visibility = 'hidden';
+    hiddenDiv.style.pointerEvents = 'none';
+    hiddenDiv.style.zIndex = '-9999';
+    document.body.appendChild(hiddenDiv);
+
+    try {
+      const chart = init(hiddenDiv, {
+        styles: {
+          grid: {
+            show: true,
+            horizontal: { color: '#1a1e28' },
+            vertical: { color: '#1a1e28' },
+          },
+          candle: {
+            bar: {
+              upColor: '#089981',
+              downColor: '#f23645',
+              upBorderColor: '#089981',
+              downBorderColor: '#f23645',
+              upWickColor: '#089981',
+              downWickColor: '#f23645',
+            },
+            priceMark: {
+              last: {
+                show: true,
+                upColor: '#089981',
+                downColor: '#f23645',
+              },
+            },
+          },
+        },
+      });
+
+      if (!chart) {
+        if (document.body.contains(hiddenDiv)) document.body.removeChild(hiddenDiv);
+        return null;
+      }
+
+      chart.setDataLoader({
+        getBars: ({ callback }) => {
+          callback(bars as any);
+        },
+      });
+      chart.createIndicator('VOL', false);
+      chart.setBarSpace(10);
+      chart.setOffsetRightDistance(80);
+      chart.scrollToRealTime(0);
+
+      // Brief delay to allow canvas rendering pipeline
+      await new Promise((r) => setTimeout(r, 80));
+
+      const imgUrl = chart.getConvertPictureUrl(true, 'png', '#0c0d10');
+
+      dispose(hiddenDiv);
+      if (document.body.contains(hiddenDiv)) {
+        document.body.removeChild(hiddenDiv);
+      }
+
+      return imgUrl || null;
+    } catch (err) {
+      console.warn('Failed to render background HTF snapshot:', err);
+      try {
+        dispose(hiddenDiv);
+        if (document.body.contains(hiddenDiv)) {
+          document.body.removeChild(hiddenDiv);
+        }
+      } catch {}
+      return null;
+    }
+  }
 }
 
 export const chartRegistry = new ChartRegistryService();
+
