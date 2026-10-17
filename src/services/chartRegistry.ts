@@ -94,21 +94,33 @@ class ChartRegistryService {
   }
 
   /**
-   * Renders a clean, high-resolution chart of a higher timeframe (e.g. 4h / 1h)
+   * Renders a clean, high-resolution chart of any timeframe (e.g. 15m or 4h)
    * in the background using an off-screen container without interrupting the user.
    */
-  async renderBackgroundHTFSnapshot(
+  async renderBackgroundChartSnapshot(
     bars: KLineData[],
-    _timeframe: string
+    options: {
+      includeCipherB?: boolean;
+      includeVol?: boolean;
+      barSpace?: number;
+      offsetRight?: number;
+    } = {}
   ): Promise<string | null> {
     if (!bars || bars.length < 15) return null;
+
+    const {
+      includeCipherB = false,
+      includeVol = true,
+      barSpace = 9,
+      offsetRight = 90,
+    } = options;
 
     const hiddenDiv = document.createElement('div');
     hiddenDiv.style.position = 'fixed';
     hiddenDiv.style.left = '-9999px';
     hiddenDiv.style.top = '-9999px';
-    hiddenDiv.style.width = '1200px';
-    hiddenDiv.style.height = '600px';
+    hiddenDiv.style.width = '1280px';
+    hiddenDiv.style.height = includeCipherB ? '720px' : '600px';
     hiddenDiv.style.visibility = 'hidden';
     hiddenDiv.style.pointerEvents = 'none';
     hiddenDiv.style.zIndex = '-9999';
@@ -152,13 +164,20 @@ class ChartRegistryService {
           callback(bars as any);
         },
       });
-      chart.createIndicator('VOL', false);
-      chart.setBarSpace(10);
-      chart.setOffsetRightDistance(80);
+
+      if (includeVol) {
+        chart.createIndicator('VOL', false);
+      }
+      if (includeCipherB) {
+        chart.createIndicator('CIPHER_B', false);
+      }
+
+      chart.setBarSpace(barSpace);
+      chart.setOffsetRightDistance(offsetRight);
       chart.scrollToRealTime(0);
 
       // Brief delay to allow canvas rendering pipeline
-      await new Promise((r) => setTimeout(r, 80));
+      await new Promise((r) => setTimeout(r, 90));
 
       const imgUrl = chart.getConvertPictureUrl(true, 'png', '#0c0d10');
 
@@ -169,7 +188,7 @@ class ChartRegistryService {
 
       return imgUrl || null;
     } catch (err) {
-      console.warn('Failed to render background HTF snapshot:', err);
+      console.warn('Failed to render background chart snapshot:', err);
       try {
         dispose(hiddenDiv);
         if (document.body.contains(hiddenDiv)) {
@@ -178,6 +197,21 @@ class ChartRegistryService {
       } catch {}
       return null;
     }
+  }
+
+  /**
+   * Alias for backward-compatible HTF macro render
+   */
+  async renderBackgroundHTFSnapshot(
+    bars: KLineData[],
+    _timeframe: string
+  ): Promise<string | null> {
+    return this.renderBackgroundChartSnapshot(bars, {
+      includeVol: true,
+      includeCipherB: false,
+      barSpace: 10,
+      offsetRight: 80,
+    });
   }
 }
 

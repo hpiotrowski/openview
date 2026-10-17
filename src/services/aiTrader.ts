@@ -3,6 +3,10 @@ import { VolumeProfileCalculator } from './volumeProfile';
 import { SessionVolumeCalculator } from './sessionVolume';
 import { SMCCalculator } from './smc';
 import { SupplyDemandCalculator } from './supplyDemand';
+import { CVDCalculator } from './cvd';
+import { NakedPocCalculator } from './nakedPoc';
+import { HtfLevelsCalculator } from './htfLevels';
+import { LiquidationHeatmapCalculator } from './liquidationHeatmap';
 import { StorageService } from './storage';
 import { chartRegistry } from './chartRegistry';
 import { BinanceService, KLineBar } from './binance';
@@ -105,6 +109,30 @@ export interface MarketSnapshot {
   supplyDemand: {
     nearestDemand: [number, number] | null;
     nearestSupply: [number, number] | null;
+  } | null;
+  cvd?: {
+    delta: number;
+    cvd: number;
+    divergence: 'BULLISH' | 'BEARISH' | null;
+  } | null;
+  nakedPocs?: Array<{
+    price: number;
+    date: string;
+    distancePct: number;
+  }> | null;
+  htfLevels?: {
+    pdh?: number;
+    pdl?: number;
+    pwh?: number;
+    pwl?: number;
+    mondayHigh?: number;
+    mondayLow?: number;
+  } | null;
+  liquidationMagnet?: {
+    price: number;
+    type: 'SHORT_LIQ' | 'LONG_LIQ';
+    leverage: string;
+    distancePct: number;
   } | null;
   htfContext?: {
     macro: HTFAnalysis;
@@ -472,8 +500,82 @@ class AITraderService {
       };
     } catch (e) {}
 
-    // 6. Screenshot (from active chart container)
-    const imageBase64 = controller.getSnapshotBase64();
+    // 6. Screenshot: Render crisp execution chart in background with Cipher B
+    // (Never distorts, zooms or interrupts the user's active screen view!)
+    let imageBase64: string | null = null;
+    try {
+      imageBase64 = await chartRegistry.renderBackgroundChartSnapshot(bars, {
+        includeCipherB: true,
+        includeVol: true,
+        barSpace: 9,
+        offsetRight: 90,
+      });
+    } catch (e) {
+      console.warn('Background chart render failed, falling back to container snapshot:', e);
+    }
+    if (!imageBase64) {
+      imageBase64 = controller.getSnapshotBase64();
+    }
+
+    // 7. Cumulative Volume Delta (CVD & Divergences)
+    let cvdSummary = null;
+    try {
+      const cvdResults = CVDCalculator.calculate(safeBars as any);
+      if (cvdResults.length > 0) {
+        const last = cvdResults[cvdResults.length - 1];
+        cvdSummary = {
+          delta: last.delta,
+          cvd: last.cvd,
+          divergence: last.divergence,
+        };
+      }
+    } catch (e) {}
+
+    // 8. Naked POC (Virgin POC Targets)
+    let nakedPocsSummary = null;
+    try {
+      const npoc = NakedPocCalculator.calculate(safeBars as any, 10);
+      if (npoc && npoc.items.length > 0) {
+        nakedPocsSummary = npoc.items
+          .filter((p) => !p.isMitigated)
+          .slice(0, 4)
+          .map((p) => ({
+            price: Math.round(p.pocPrice * 100) / 100,
+            date: p.dateStr,
+            distancePct: Math.round(p.distancePercent * 10) / 10,
+          }));
+      }
+    } catch (e) {}
+
+    // 9. HTF Key Levels (PDH, PDL, Monday High/Low, Weekly Open)
+    let htfLevelsSummary = null;
+    try {
+      const htfL = HtfLevelsCalculator.calculate(safeBars as any);
+      if (htfL) {
+        htfLevelsSummary = {
+          pdh: htfL.pdh ? Math.round(htfL.pdh * 100) / 100 : undefined,
+          pdl: htfL.pdl ? Math.round(htfL.pdl * 100) / 100 : undefined,
+          pwh: htfL.pwh ? Math.round(htfL.pwh * 100) / 100 : undefined,
+          pwl: htfL.pwl ? Math.round(htfL.pwl * 100) / 100 : undefined,
+          mondayHigh: htfL.mondayHigh ? Math.round(htfL.mondayHigh * 100) / 100 : undefined,
+          mondayLow: htfL.mondayLow ? Math.round(htfL.mondayLow * 100) / 100 : undefined,
+        };
+      }
+    } catch (e) {}
+
+    // 10. Liquidation Heatmap Clusters
+    let liqSummary = null;
+    try {
+      const liq = LiquidationHeatmapCalculator.calculate(safeBars as any);
+      if (liq && liq.magnetCluster) {
+        liqSummary = {
+          price: Math.round(liq.magnetCluster.price * 100) / 100,
+          type: liq.magnetCluster.type,
+          leverage: liq.magnetCluster.leverage,
+          distancePct: Math.round(liq.magnetCluster.distancePct * 10) / 10,
+        };
+      }
+    } catch (e) {}
 
     return {
       symbol: controller.symbol,
@@ -488,6 +590,10 @@ class AITraderService {
         hasSellDot,
         hasGoldDot,
       },
+      cvd: cvdSummary,
+      nakedPocs: nakedPocsSummary,
+      htfLevels: htfLevelsSummary,
+      liquidationMagnet: liqSummary,
       volumeProfile: vpResult,
       sessionVolume: svResult,
       smc: smcSummary,
@@ -513,24 +619,27 @@ class AITraderService {
       throw new Error('Klucz OpenRouter API Key jest pusty lub niepoprawny. Wklej swój klucz w zakładce Ustawienia (np. sk-or-v1-...).');
     }
 
-    const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Order Blocks, Liquidity Sweeps, and Market Cipher B (WaveTrend & MFI).
+    const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Cumulative Volume Delta (CVD & Smart Money Absorptions), Virgin/Naked POCs, Session Liquidity Sweeps (PDH/PDL, Monday Range), Liquidation Heatmap Clusters, and Market Cipher B (WaveTrend & MFI).
 
 Your objective:
-Analyze the provided multi-timeframe quantitative metrics AND the attached chart screenshot for ${snapshot.symbol} (Execution on ${snapshot.interval}).
+Analyze the provided multi-timeframe quantitative metrics, institutional order flow filters, AND the attached background-rendered chart screenshots for ${snapshot.symbol} (Execution on ${snapshot.interval}).
 Formulate a concrete, institutional trade setup with a minimum Risk:Reward of 1:2.5.
 If the market is currently chopping in no-man's land or has no high-probability edge, respond with direction: "NEUTRAL".
 
-TOP-DOWN MULTI-TIMEFRAME RULES:
-1. Macro Alignment: Align execution with the Macro HTF regime. Do not fight strong higher-timeframe momentum unless playing a confirmed rejection at an HTF extreme.
+TOP-DOWN MULTI-TIMEFRAME & INSTITUTIONAL RULES:
+1. Macro Alignment: Align execution with the Macro HTF regime. Do not fight strong higher-timeframe momentum unless playing a confirmed rejection or liquidity sweep at an HTF extreme.
 2. Direction must be "LONG", "SHORT", or "NEUTRAL".
-3. If setup is actionable (LONG/SHORT):
-   - entryPrice must be a realistic price near key confluence on the execution timeframe (${snapshot.interval}) (e.g. Daily POC, Order Block, Demand/Supply).
+3. Order Flow & CVD Divergences: Look for passive limit order absorption (e.g., Bullish CVD divergence where price forms lower lows or equal lows while CVD trends upwards, indicating aggressive spot/taker selling is being absorbed by smart money limit buys).
+4. Unmitigated Targets (Naked POCs & Liquidation Clusters): Use Virgin / Naked POCs and Liquidation Heatmap clusters (50x/100x leverage pools) as high-probability magnet targets for TP1 / TP2.
+5. Session Liquidity (PDH / PDL / Monday Range): Note if price has swept Previous Day High (PDH) or Previous Day Low (PDL) to hunt retail stops before reversing.
+6. If setup is actionable (LONG/SHORT):
+   - entryPrice must be a realistic price near key confluence on the execution timeframe (${snapshot.interval}) (e.g. Daily POC, Order Block, Demand/Supply, HTF sweep level).
    - entryZone must be [min, max] bounding the entry trigger area.
    - stopLoss must be placed beyond the invalidation level (below demand/OB for long, above supply/OB for short).
-   - takeProfit1 and takeProfit2 must target untapped liquidity pools, HTF POC, or opposite VAH/VAL.
+   - takeProfit1 and takeProfit2 must target untapped liquidity pools, Naked POCs, Liquidation Clusters, HTF POC, or opposite VAH/VAL.
    - riskRewardRatio must be calculated accurately as |TP1 - Entry| / |Entry - SL| and MUST be >= 2.5 (unless NEUTRAL).
-4. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
-5. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
+7. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
+8. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
 
 Return ONLY a pure, valid JSON object matching this TypeScript interface without any markdown code fences, comments, or extra text:
 {
@@ -586,12 +695,66 @@ Return ONLY a pure, valid JSON object matching this TypeScript interface without
 `;
     }
 
+    let institutionalBlock = '';
+    const instParts: string[] = [];
+
+    if (snapshot.cvd) {
+      instParts.push(
+        `- Cumulative Volume Delta (CVD): Delta = ${snapshot.cvd.delta > 0 ? '+' : ''}${Math.round(
+          snapshot.cvd.delta
+        )}, Divergence = ${
+          snapshot.cvd.divergence
+            ? `${snapshot.cvd.divergence} DIVERGENCE (Absorption detected)`
+            : 'None'
+        }`
+      );
+    }
+
+    if (snapshot.nakedPocs && snapshot.nakedPocs.length > 0) {
+      const pocList = snapshot.nakedPocs
+        .map((p) => `$${p.price} (${p.distancePct > 0 ? '+' : ''}${p.distancePct}%, ${p.date})`)
+        .join(', ');
+      instParts.push(`- Virgin / Naked POCs (Unmitigated High-Volume Magnets): ${pocList}`);
+    }
+
+    if (snapshot.htfLevels) {
+      const { pdh, pdl, pwh, pwl, mondayHigh, mondayLow } = snapshot.htfLevels;
+      const levels: string[] = [];
+      if (pdh) levels.push(`PDH: $${pdh}`);
+      if (pdl) levels.push(`PDL: $${pdl}`);
+      if (pwh) levels.push(`PWH: $${pwh}`);
+      if (pwl) levels.push(`PWL: $${pwl}`);
+      if (mondayHigh) levels.push(`Monday High: $${mondayHigh}`);
+      if (mondayLow) levels.push(`Monday Low: $${mondayLow}`);
+      if (levels.length > 0) {
+        instParts.push(`- HTF Key Levels / Session Liquidity: ${levels.join(' | ')}`);
+      }
+    }
+
+    if (snapshot.liquidationMagnet) {
+      instParts.push(
+        `- Liquidation Heatmap Magnet Cluster: $${snapshot.liquidationMagnet.price} (${
+          snapshot.liquidationMagnet.type === 'SHORT_LIQ' ? 'Short Squeeze' : 'Long Flush'
+        }, ~${snapshot.liquidationMagnet.leverage} leverage cluster, distance: ${
+          snapshot.liquidationMagnet.distancePct
+        }%)`
+      );
+    }
+
+    if (instParts.length > 0) {
+      institutionalBlock = `
+=== INSTITUTIONAL ORDER FLOW & LIQUIDITY FILTERS ===
+${instParts.join('\n')}
+`;
+    }
+
     const userMessageContent: any[] = [
       {
         type: 'text',
         text: `Analyze current market data for ${snapshot.symbol}:
 
 ${htfBreakdown}
+${institutionalBlock}
 === EXECUTION TIMEFRAME (${snapshot.interval}) - ATTACHED SCREENSHOT & LOCAL DATA ===
 Current Live Price: $${snapshot.currentPrice}
 Cipher B (${snapshot.interval}): WT1 = ${snapshot.cipherB.wt1}, WT2 = ${snapshot.cipherB.wt2}, MFI = ${snapshot.cipherB.mfi}, Recent BuyDot = ${snapshot.cipherB.hasBuyDot}, SellDot = ${snapshot.cipherB.hasSellDot}, GoldDot = ${snapshot.cipherB.hasGoldDot}
@@ -600,7 +763,10 @@ Daily Session POC: $${snapshot.sessionVolume?.todayPOC ?? 'N/A'}
 SMC Trend Bias (${snapshot.interval}): ${snapshot.smc?.trendBias ?? 'N/A'}, Bullish OB: ${JSON.stringify(snapshot.smc?.bullishOB ?? 'none')}, Bearish OB: ${JSON.stringify(snapshot.smc?.bearishOB ?? 'none')}
 Demand Zone: ${JSON.stringify(snapshot.supplyDemand?.nearestDemand ?? 'none')}, Supply Zone: ${JSON.stringify(snapshot.supplyDemand?.nearestSupply ?? 'none')}
 
-Review the visual chart screenshot attached below (${snapshot.interval} showing candle anatomy, wicks, zones, and Cipher B wave slope).
+Review the visual chart screenshots attached below (both rendered off-screen with optimal framing and high fidelity):
+1. Macro HTF Chart (${snapshot.htfContext?.macro.timeframe || '4h'}): Key swings, volume, and macro trend.
+2. Execution Chart (${snapshot.interval}): Candle anatomy, wicks, zones, and Market Cipher B (WaveTrend & MFI).
+
 Formulate a trading plan conforming to the Macro HTF bias with execution on ${snapshot.interval}.
 Return strictly the JSON trade plan.`,
       },
@@ -622,7 +788,7 @@ Return strictly the JSON trade plan.`,
     if (snapshot.imageBase64) {
       userMessageContent.push({
         type: 'text',
-        text: `Attached Image ${snapshot.htfImageBase64 ? '2' : '1'}: Execution Timeframe Chart (${snapshot.interval}) from user screen (showing exact candle anatomy, wicks, zones, and Cipher B wave slope):`,
+        text: `Attached Image ${snapshot.htfImageBase64 ? '2' : '1'}: Execution Timeframe Chart (${snapshot.interval}) rendered in background with Cipher B + Volume (showing exact candle anatomy, wicks, zones, and Cipher B wave slope):`,
       });
       userMessageContent.push({
         type: 'image_url',

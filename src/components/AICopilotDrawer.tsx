@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Target,
   Zap,
+  Activity,
 } from 'lucide-react';
 import {
   aiTraderService,
@@ -156,13 +157,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       return;
     }
 
-    // Auto-frame chart before capture so the screenshot is framed with optimal zoom & margin
-    aiTraderService.autoFrameActiveChart(activeChartId);
-    await new Promise((r) => setTimeout(r, 80));
-
     setIsAnalyzing(true);
     setErrorMsg(null);
-    setAnalysisStep('1. Auto-kadr, zrzut ekranu & renderowanie 4h w tle...');
+    setAnalysisStep('1. Pobieranie danych & renderowanie 15m i 4h w tle...');
 
     try {
       const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, true);
@@ -171,7 +168,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       }
       setCapturedSnapshot(snapshot);
 
-      setAnalysisStep('2. Analiza Top-Down (4h Makro, 1h Struktura, Cipher B & SMC)...');
+      setAnalysisStep('2. Analiza Top-Down (4h Makro, 15m, CVD, nPOC, HTF & Cipher B)...');
       const effectiveBrainModel =
         brainModel === 'custom' && customBrainModel ? customBrainModel : brainModel;
 
@@ -567,6 +564,90 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                     </div>
                   )}
 
+                  {/* Institutional & Order Flow Confluence Box */}
+                  {capturedSnapshot &&
+                    (capturedSnapshot.cvd ||
+                      (capturedSnapshot.nakedPocs && capturedSnapshot.nakedPocs.length > 0) ||
+                      capturedSnapshot.htfLevels ||
+                      capturedSnapshot.liquidationMagnet) && (
+                      <div className="p-2.5 rounded-lg bg-[#131722] border border-[#2a2e39] space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between text-[10px] text-[#868993] font-semibold uppercase tracking-wider">
+                          <span className="flex items-center gap-1 text-[#00bcd4]">
+                            <Activity size={12} /> Filtry Instytucjonalne (Order Flow)
+                          </span>
+                          <span className="text-gray-400">Smart Money</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                          {capturedSnapshot.cvd && (
+                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80">
+                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">CVD Divergence</div>
+                              <div
+                                className={`font-bold ${
+                                  capturedSnapshot.cvd.divergence === 'BULLISH'
+                                    ? 'text-emerald-400'
+                                    : capturedSnapshot.cvd.divergence === 'BEARISH'
+                                    ? 'text-rose-400'
+                                    : 'text-gray-300'
+                                }`}
+                              >
+                                {capturedSnapshot.cvd.divergence
+                                  ? `${capturedSnapshot.cvd.divergence} DIV`
+                                  : 'Brak dywergencji'}
+                              </div>
+                            </div>
+                          )}
+                          {capturedSnapshot.liquidationMagnet && (
+                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80">
+                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">Magnes Likwidacji</div>
+                              <div className="font-bold text-[#f7a600]">
+                                ${capturedSnapshot.liquidationMagnet.price.toLocaleString()} ({capturedSnapshot.liquidationMagnet.leverage})
+                              </div>
+                            </div>
+                          )}
+                          {capturedSnapshot.nakedPocs && capturedSnapshot.nakedPocs.length > 0 && (
+                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80 col-span-2">
+                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">Naked POCs (Dziewicze Wolumeny)</div>
+                              <div className="text-[#d1d4dc] truncate">
+                                {capturedSnapshot.nakedPocs
+                                  .map(
+                                    (p) =>
+                                      `$${p.price.toLocaleString()} (${
+                                        p.distancePct > 0 ? '+' : ''
+                                      }${p.distancePct}%)`
+                                  )
+                                  .join(' • ')}
+                              </div>
+                            </div>
+                          )}
+                          {capturedSnapshot.htfLevels &&
+                            (capturedSnapshot.htfLevels.pdh ||
+                              capturedSnapshot.htfLevels.pdl ||
+                              capturedSnapshot.htfLevels.mondayHigh) && (
+                              <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80 col-span-2">
+                                <div className="text-[#868993] font-sans text-[9px] mb-0.5">Poziomy Sesyjne (PDH / PDL / Mon)</div>
+                                <div className="text-[#868993] flex items-center gap-2">
+                                  {capturedSnapshot.htfLevels.pdh && (
+                                    <span>
+                                      PDH: <strong className="text-rose-400">${capturedSnapshot.htfLevels.pdh.toLocaleString()}</strong>
+                                    </span>
+                                  )}
+                                  {capturedSnapshot.htfLevels.pdl && (
+                                    <span>
+                                      PDL: <strong className="text-emerald-400">${capturedSnapshot.htfLevels.pdl.toLocaleString()}</strong>
+                                    </span>
+                                  )}
+                                  {capturedSnapshot.htfLevels.mondayHigh && (
+                                    <span>
+                                      MonH: <strong className="text-white">${capturedSnapshot.htfLevels.mondayHigh.toLocaleString()}</strong>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    )}
+
                   {/* Trade Levels Grid */}
                   <div className="grid grid-cols-3 gap-2 pt-1 border-t border-[#2a2e39]/60 text-xs font-mono">
                     <div className="p-2 rounded bg-[#131722] border border-[#2a2e39]">
@@ -650,7 +731,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                                 : 'text-[#868993] hover:text-white'
                             }`}
                           >
-                            Wykonawczy ({capturedSnapshot.interval})
+                            Wykonawczy ({capturedSnapshot.interval} w tle)
                           </button>
                           <button
                             type="button"
