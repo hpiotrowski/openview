@@ -5,7 +5,22 @@ import { SMCCalculator } from './smc';
 import { SupplyDemandCalculator } from './supplyDemand';
 import { StorageService } from './storage';
 import { chartRegistry } from './chartRegistry';
+import { BinanceService, KLineBar } from './binance';
 import { KLineData } from 'klinecharts';
+
+export interface HTFAnalysis {
+  timeframe: string;
+  trend: string;
+  poc: number;
+  vah: number;
+  val: number;
+  wt1: number;
+  wt2: number;
+  mfi: number;
+  momentum: 'RISING' | 'FALLING' | 'OVERSOLD' | 'OVERBOUGHT';
+  nearestBullishOB: [number, number] | null;
+  nearestBearishOB: [number, number] | null;
+}
 
 export interface TradingPlan {
   id: string;
@@ -42,6 +57,10 @@ export interface TradingPlan {
     requiredCipherSignal: 'GREEN_DOT' | 'RED_DOT' | 'GOLD_DOT' | 'MFI_ABOVE_ZERO' | 'NONE';
     invalidationPrice: number;
     executionTrigger: string;
+  };
+  htfContext?: {
+    macro: HTFAnalysis;
+    structure: HTFAnalysis;
   };
   appliedToChart?: boolean;
 }
@@ -87,6 +106,10 @@ export interface MarketSnapshot {
     nearestDemand: [number, number] | null;
     nearestSupply: [number, number] | null;
   } | null;
+  htfContext?: {
+    macro: HTFAnalysis;
+    structure: HTFAnalysis;
+  };
   imageBase64: string | null;
 }
 
@@ -113,6 +136,90 @@ export const JEV_MODEL_PRESETS = [
   { id: 'jev-1.13', name: 'Jev 1.13 ($0.04/1M in, $0 out)', isRecommended: false },
   { id: 'custom', name: 'Inny / Własny identyfikator...', isRecommended: false },
 ];
+
+function getHigherTimeframes(currentInterval: string): { macro: string; structure: string } {
+  const norm = currentInterval.toLowerCase();
+  if (norm.includes('s') || norm === '1m' || norm === '3m') {
+    return { macro: '1h', structure: '15m' };
+  }
+  if (norm === '5m') {
+    return { macro: '4h', structure: '1h' };
+  }
+  if (norm === '15m' || norm === '30m') {
+    return { macro: '4h', structure: '1h' };
+  }
+  if (norm === '1h' || norm === '2h') {
+    return { macro: '1d', structure: '4h' };
+  }
+  if (norm === '4h') {
+    return { macro: '1w', structure: '1d' };
+  }
+  return { macro: '4h', structure: '1h' };
+}
+
+function analyzeHTF(timeframe: string, bars: KLineBar[]): HTFAnalysis | null {
+  if (!bars || bars.length < 15) return null;
+
+  const safeBars = bars.map((b) => ({
+    timestamp: b.timestamp,
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+    volume: b.volume ?? 0,
+    turnover: b.turnover,
+  }));
+
+  const cipher = CipherBCalculator.calculate(safeBars as any);
+  const lastC = cipher[cipher.length - 1] || { wt1: 0, wt2: 0, mfi: 0 };
+
+  let momentum: 'RISING' | 'FALLING' | 'OVERSOLD' | 'OVERBOUGHT' = 'RISING';
+  if (lastC.wt1 <= -45) momentum = 'OVERSOLD';
+  else if (lastC.wt1 >= 45) momentum = 'OVERBOUGHT';
+  else if (lastC.wt1 > lastC.wt2) momentum = 'RISING';
+  else momentum = 'FALLING';
+
+  let poc = 0;
+  let vah = 0;
+  let val = 0;
+  try {
+    const vp = VolumeProfileCalculator.calculate(safeBars as any, 30);
+    if (vp) {
+      poc = Math.round(vp.pocPrice * 100) / 100;
+      vah = Math.round(vp.vahPrice * 100) / 100;
+      val = Math.round(vp.valPrice * 100) / 100;
+    }
+  } catch (e) {}
+
+  let trend = 'CONSOLIDATION';
+  let nearestBullishOB: [number, number] | null = null;
+  let nearestBearishOB: [number, number] | null = null;
+  try {
+    const smc = SMCCalculator.calculate(bars as any);
+    const lastBreak = smc.breaks[smc.breaks.length - 1];
+    if (lastBreak) {
+      trend = `${lastBreak.direction} ${lastBreak.type}`;
+    }
+    const bullOB = smc.orderBlocks.find((ob) => ob.type === 'BULLISH' && !ob.isMitigated);
+    if (bullOB) nearestBullishOB = [bullOB.bottom, bullOB.top];
+    const bearOB = smc.orderBlocks.find((ob) => ob.type === 'BEARISH' && !ob.isMitigated);
+    if (bearOB) nearestBearishOB = [bearOB.bottom, bearOB.top];
+  } catch (e) {}
+
+  return {
+    timeframe,
+    trend,
+    poc,
+    vah,
+    val,
+    wt1: Math.round(lastC.wt1 * 10) / 10,
+    wt2: Math.round(lastC.wt2 * 10) / 10,
+    mfi: Math.round(lastC.mfi * 10) / 10,
+    momentum,
+    nearestBullishOB,
+    nearestBearishOB,
+  };
+}
 
 class AITraderService {
   private activeSentinelInterval: any = null;
@@ -156,9 +263,9 @@ class AITraderService {
   }
 
   /**
-   * Harvests multi-dimensional market data and high-res chart screenshot
+   * Harvests multi-dimensional market data, background HTF analysis, and high-res chart screenshot
    */
-  gatherMarketSnapshot(chartId?: string): MarketSnapshot | null {
+  async gatherMarketSnapshot(chartId?: string, fetchHTF = true): Promise<MarketSnapshot | null> {
     const controller = chartRegistry.getActive(chartId);
     if (!controller) return null;
 
@@ -168,7 +275,31 @@ class AITraderService {
     const currentBar = bars[bars.length - 1];
     const currentPrice = currentBar.close;
 
-    // 1. Cipher B calculation
+    // Background fetch of Multi-Timeframe data (e.g. 4h Macro & 1h Structure)
+    let htfContext: { macro: HTFAnalysis; structure: HTFAnalysis } | undefined = undefined;
+    if (fetchHTF) {
+      try {
+        const { macro, structure } = getHigherTimeframes(controller.interval);
+        const [macroBars, structBars] = await Promise.all([
+          BinanceService.fetchKlines(controller.symbol, macro, 100),
+          BinanceService.fetchKlines(controller.symbol, structure, 100),
+        ]);
+
+        const macroAnalysis = analyzeHTF(macro, macroBars);
+        const structAnalysis = analyzeHTF(structure, structBars);
+
+        if (macroAnalysis && structAnalysis) {
+          htfContext = {
+            macro: macroAnalysis,
+            structure: structAnalysis,
+          };
+        }
+      } catch (err) {
+        console.warn('Failed to fetch background HTF context from Binance:', err);
+      }
+    }
+
+    // 1. Cipher B calculation (Current chart timeframe)
     const cipherResults = CipherBCalculator.calculate(bars);
     const lastCipher = cipherResults[cipherResults.length - 1] || {
       wt1: 0,
@@ -252,7 +383,7 @@ class AITraderService {
       };
     } catch (e) {}
 
-    // 6. Screenshot
+    // 6. Screenshot (from active chart container)
     const imageBase64 = controller.getSnapshotBase64();
 
     return {
@@ -272,6 +403,7 @@ class AITraderService {
       sessionVolume: svResult,
       smc: smcSummary,
       supplyDemand: sdSummary,
+      htfContext,
       imageBase64,
     };
   }
@@ -290,23 +422,24 @@ class AITraderService {
       throw new Error('Brak klucza OpenRouter API Key. Wprowadź klucz w ustawieniach.');
     }
 
-    const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Order Blocks, Liquidity Sweeps, and Market Cipher B (WaveTrend & MFI).
+    const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Order Blocks, Liquidity Sweeps, and Market Cipher B (WaveTrend & MFI).
 
 Your objective:
-Analyze the provided multi-timeframe technical metrics AND the attached chart screenshot for ${snapshot.symbol} (${snapshot.interval}).
+Analyze the provided multi-timeframe quantitative metrics AND the attached chart screenshot for ${snapshot.symbol} (Execution on ${snapshot.interval}).
 Formulate a concrete, institutional trade setup with a minimum Risk:Reward of 1:2.5.
 If the market is currently chopping in no-man's land or has no high-probability edge, respond with direction: "NEUTRAL".
 
-STRICT RULES:
-1. Direction must be "LONG", "SHORT", or "NEUTRAL".
-2. If setup is actionable (LONG/SHORT):
-   - entryPrice must be a realistic price near key confluence (e.g. Daily POC, Order Block, Demand/Supply).
+TOP-DOWN MULTI-TIMEFRAME RULES:
+1. Macro Alignment: Align execution with the Macro HTF regime. Do not fight strong higher-timeframe momentum unless playing a confirmed rejection at an HTF extreme.
+2. Direction must be "LONG", "SHORT", or "NEUTRAL".
+3. If setup is actionable (LONG/SHORT):
+   - entryPrice must be a realistic price near key confluence on the execution timeframe (${snapshot.interval}) (e.g. Daily POC, Order Block, Demand/Supply).
    - entryZone must be [min, max] bounding the entry trigger area.
    - stopLoss must be placed beyond the invalidation level (below demand/OB for long, above supply/OB for short).
-   - takeProfit1 and takeProfit2 must target untapped liquidity pools or opposite POC/VAH/VAL.
+   - takeProfit1 and takeProfit2 must target untapped liquidity pools, HTF POC, or opposite VAH/VAL.
    - riskRewardRatio must be calculated accurately as |TP1 - Entry| / |Entry - SL| and MUST be >= 2.5 (unless NEUTRAL).
-3. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
-4. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
+4. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
+5. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
 
 Return ONLY a pure, valid JSON object matching this TypeScript interface without any markdown code fences, comments, or extra text:
 {
@@ -343,18 +476,42 @@ Return ONLY a pure, valid JSON object matching this TypeScript interface without
   }
 }`;
 
+    let htfBreakdown = '';
+    if (snapshot.htfContext) {
+      const { macro, structure } = snapshot.htfContext;
+      htfBreakdown = `
+=== HIGHER TIMEFRAME (HTF) QUANTITATIVE REGIME ===
+1. Macro HTF (${macro.timeframe}):
+   - Trend / Structure: ${macro.trend}
+   - Cipher B: WT1 = ${macro.wt1}, WT2 = ${macro.wt2}, MFI = ${macro.mfi} (State: ${macro.momentum})
+   - Volume Profile: POC = $${macro.poc || 'N/A'}, VAH = $${macro.vah || 'N/A'}, VAL = $${macro.val || 'N/A'}
+   - Key Order Blocks: Bullish OB = ${JSON.stringify(macro.nearestBullishOB || 'none')}, Bearish OB = ${JSON.stringify(macro.nearestBearishOB || 'none')}
+
+2. Structure HTF (${structure.timeframe}):
+   - Trend / Structure: ${structure.trend}
+   - Cipher B: WT1 = ${structure.wt1}, WT2 = ${structure.wt2}, MFI = ${structure.mfi} (State: ${structure.momentum})
+   - Volume Profile: POC = $${structure.poc || 'N/A'}, VAH = $${structure.vah || 'N/A'}, VAL = $${structure.val || 'N/A'}
+   - Key Order Blocks: Bullish OB = ${JSON.stringify(structure.nearestBullishOB || 'none')}, Bearish OB = ${JSON.stringify(structure.nearestBearishOB || 'none')}
+`;
+    }
+
     const userMessageContent: any[] = [
       {
         type: 'text',
-        text: `Analyze current market data for ${snapshot.symbol} on ${snapshot.interval} timeframe:
-Current Price: $${snapshot.currentPrice}
-Cipher B: WT1 = ${snapshot.cipherB.wt1}, WT2 = ${snapshot.cipherB.wt2}, MFI = ${snapshot.cipherB.mfi}, Recent BuyDot = ${snapshot.cipherB.hasBuyDot}, SellDot = ${snapshot.cipherB.hasSellDot}, GoldDot = ${snapshot.cipherB.hasGoldDot}
-Volume Profile POC: $${snapshot.volumeProfile?.poc ?? 'N/A'}, VAH: $${snapshot.volumeProfile?.vah ?? 'N/A'}, VAL: $${snapshot.volumeProfile?.val ?? 'N/A'}
+        text: `Analyze current market data for ${snapshot.symbol}:
+
+${htfBreakdown}
+=== EXECUTION TIMEFRAME (${snapshot.interval}) - ATTACHED SCREENSHOT & LOCAL DATA ===
+Current Live Price: $${snapshot.currentPrice}
+Cipher B (${snapshot.interval}): WT1 = ${snapshot.cipherB.wt1}, WT2 = ${snapshot.cipherB.wt2}, MFI = ${snapshot.cipherB.mfi}, Recent BuyDot = ${snapshot.cipherB.hasBuyDot}, SellDot = ${snapshot.cipherB.hasSellDot}, GoldDot = ${snapshot.cipherB.hasGoldDot}
+Volume Profile (${snapshot.interval}): POC = $${snapshot.volumeProfile?.poc ?? 'N/A'}, VAH = $${snapshot.volumeProfile?.vah ?? 'N/A'}, VAL = $${snapshot.volumeProfile?.val ?? 'N/A'}
 Daily Session POC: $${snapshot.sessionVolume?.todayPOC ?? 'N/A'}
-SMC Trend Bias: ${snapshot.smc?.trendBias ?? 'N/A'}, Bullish OB: ${JSON.stringify(snapshot.smc?.bullishOB ?? 'none')}, Bearish OB: ${JSON.stringify(snapshot.smc?.bearishOB ?? 'none')}
+SMC Trend Bias (${snapshot.interval}): ${snapshot.smc?.trendBias ?? 'N/A'}, Bullish OB: ${JSON.stringify(snapshot.smc?.bullishOB ?? 'none')}, Bearish OB: ${JSON.stringify(snapshot.smc?.bearishOB ?? 'none')}
 Demand Zone: ${JSON.stringify(snapshot.supplyDemand?.nearestDemand ?? 'none')}, Supply Zone: ${JSON.stringify(snapshot.supplyDemand?.nearestSupply ?? 'none')}
 
-Review the visual chart screenshot attached below. Return strictly the JSON trade plan.`,
+Review the visual chart screenshot attached below (${snapshot.interval} showing candle anatomy, wicks, zones, and Cipher B wave slope).
+Formulate a trading plan conforming to the Macro HTF bias with execution on ${snapshot.interval}.
+Return strictly the JSON trade plan.`,
       },
     ];
 
@@ -455,6 +612,7 @@ Review the visual chart screenshot attached below. Return strictly the JSON trad
         invalidationPrice: snapshot.currentPrice * 0.98,
         executionTrigger: 'Cena w strefie',
       },
+      htfContext: snapshot.htfContext,
       appliedToChart: false,
     };
 

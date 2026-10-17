@@ -98,16 +98,16 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
     setIsAnalyzing(true);
     setErrorMsg(null);
-    setAnalysisStep('1. Przechwytywanie zrzutu wykresu & poziomów technicznych...');
+    setAnalysisStep('1. Zbieranie zrzutu ekranu & danych MTF (4h + 1h w tle)...');
 
     try {
-      const snapshot = aiTraderService.gatherMarketSnapshot(activeChartId);
+      const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, true);
       if (!snapshot) {
         throw new Error('Nie udało się pobrać danych z aktywnego wykresu.');
       }
       setCapturedSnapshot(snapshot);
 
-      setAnalysisStep('2. Analiza SMC, Order Blocków, Volume Profile & Cipher B...');
+      setAnalysisStep('2. Analiza Top-Down (4h Makro, 1h Struktura, Cipher B & SMC)...');
       const effectiveBrainModel =
         brainModel === 'custom' && customBrainModel ? customBrainModel : brainModel;
 
@@ -153,7 +153,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
     setIsSentinelScanning(true);
     try {
-      const snapshot = aiTraderService.gatherMarketSnapshot(activeChartId);
+      const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, false);
       if (!snapshot) return;
 
       const effectiveJevModel = jevModel === 'custom' && customJevModel ? customJevModel : jevModel;
@@ -409,6 +409,73 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                     <h4 className="font-bold text-white text-xs mb-1">{activePlan.title}</h4>
                     <p className="text-[11px] text-[#868993] leading-relaxed">{activePlan.summary}</p>
                   </div>
+
+                  {/* Multi-Timeframe Context Box */}
+                  {activePlan.htfContext && (
+                    <div className="p-2.5 rounded-lg bg-[#131722] border border-[#2a2e39] space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-[10px] text-[#868993] font-semibold uppercase tracking-wider">
+                        <span className="flex items-center gap-1 text-[#2962ff]">
+                          <Layers size={12} /> Kontekst Multi-Timeframe (MTF)
+                        </span>
+                        <span className="text-gray-400">Top-Down Analysis</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                        <div className="p-2 rounded bg-[#1e222d] border border-[#2a2e39]/80">
+                          <div className="flex items-center justify-between text-[10px] mb-0.5">
+                            <span className="text-[#868993] font-sans font-semibold">
+                              Makro ({activePlan.htfContext.macro.timeframe})
+                            </span>
+                            <span
+                              className={`font-black ${
+                                activePlan.htfContext.macro.trend.includes('BULLISH')
+                                  ? 'text-emerald-400'
+                                  : activePlan.htfContext.macro.trend.includes('BEARISH')
+                                  ? 'text-rose-400'
+                                  : 'text-yellow-400'
+                              }`}
+                            >
+                              {activePlan.htfContext.macro.trend}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-[#868993]">
+                            WT: <strong className="text-white">{activePlan.htfContext.macro.wt1}</strong> | MFI: <strong className="text-white">{activePlan.htfContext.macro.mfi}</strong>
+                          </div>
+                          {activePlan.htfContext.macro.poc > 0 && (
+                            <div className="text-[10px] text-[#868993]">
+                              POC: ${activePlan.htfContext.macro.poc.toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="p-2 rounded bg-[#1e222d] border border-[#2a2e39]/80">
+                          <div className="flex items-center justify-between text-[10px] mb-0.5">
+                            <span className="text-[#868993] font-sans font-semibold">
+                              Struktura ({activePlan.htfContext.structure.timeframe})
+                            </span>
+                            <span
+                              className={`font-black ${
+                                activePlan.htfContext.structure.trend.includes('BULLISH')
+                                  ? 'text-emerald-400'
+                                  : activePlan.htfContext.structure.trend.includes('BEARISH')
+                                  ? 'text-rose-400'
+                                  : 'text-yellow-400'
+                              }`}
+                            >
+                              {activePlan.htfContext.structure.trend}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-[#868993]">
+                            Momentum: <strong className="text-white">{activePlan.htfContext.structure.momentum}</strong>
+                          </div>
+                          {activePlan.htfContext.structure.poc > 0 && (
+                            <div className="text-[10px] text-[#868993]">
+                              POC: ${activePlan.htfContext.structure.poc.toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Trade Levels Grid */}
                   <div className="grid grid-cols-3 gap-2 pt-1 border-t border-[#2a2e39]/60 text-xs font-mono">
