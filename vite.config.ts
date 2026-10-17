@@ -8,5 +8,17 @@ export default defineConfig({
   base: './',
   server: {
     port: 3000,
+    proxy: {
+      '/api/opencode': {
+        target: 'https://opencode.ai',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/opencode/, ''),
+      },
+      '/api/openrouter': {
+        target: 'https://openrouter.ai',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/openrouter/, ''),
+      },
+    },
   },
 });

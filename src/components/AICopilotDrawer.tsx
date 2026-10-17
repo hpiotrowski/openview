@@ -25,8 +25,12 @@ import {
   TradingPlan,
   JevDecision,
   MarketSnapshot,
-  BRAIN_MODEL_PRESETS,
-  JEV_MODEL_PRESETS,
+  OPENCODE_BRAIN_PRESETS,
+  OPENCODE_JEV_PRESETS,
+  OPENROUTER_BRAIN_PRESETS,
+  OPENROUTER_JEV_PRESETS,
+  detectProvider,
+  AIProvider,
 } from '../services/aiTrader';
 import { StorageService } from '../services/storage';
 
@@ -52,18 +56,50 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   // Settings State
   const [apiKey, setApiKey] = useState(() => StorageService.getOpenRouterKey());
   const [showApiKey, setShowApiKey] = useState(false);
-  const [brainModel, setBrainModel] = useState(() => StorageService.getBrainModel());
+  const activeProvider = detectProvider(apiKey);
+  const brainPresets = activeProvider === 'opencode' ? OPENCODE_BRAIN_PRESETS : OPENROUTER_BRAIN_PRESETS;
+  const jevPresets = activeProvider === 'opencode' ? OPENCODE_JEV_PRESETS : OPENROUTER_JEV_PRESETS;
+
+  const [brainModel, setBrainModel] = useState(() => {
+    const saved = StorageService.getBrainModel();
+    const presets = detectProvider(StorageService.getOpenRouterKey()) === 'opencode'
+      ? OPENCODE_BRAIN_PRESETS
+      : OPENROUTER_BRAIN_PRESETS;
+    return presets.some((p) => p.id === saved) || saved === 'custom' ? saved : presets[0].id;
+  });
   const [customBrainModel, setCustomBrainModel] = useState('');
-  const [jevModel, setJevModel] = useState(() => StorageService.getJevModel());
+
+  const [jevModel, setJevModel] = useState(() => {
+    const saved = StorageService.getJevModel();
+    const presets = detectProvider(StorageService.getOpenRouterKey()) === 'opencode'
+      ? OPENCODE_JEV_PRESETS
+      : OPENROUTER_JEV_PRESETS;
+    return presets.some((p) => p.id === saved) || saved === 'custom' ? saved : presets[0].id;
+  });
   const [customJevModel, setCustomJevModel] = useState('');
   const [isTestingKey, setIsTestingKey] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; provider?: AIProvider } | null>(null);
 
   const handleApiKeyChange = (val: string) => {
     const cleaned = aiTraderService.cleanApiKey(val);
+    const newProv = detectProvider(cleaned);
     setApiKey(cleaned);
     StorageService.setOpenRouterKey(cleaned);
     setTestResult(null);
+
+    const targetBrainPresets = newProv === 'opencode' ? OPENCODE_BRAIN_PRESETS : OPENROUTER_BRAIN_PRESETS;
+    const targetJevPresets = newProv === 'opencode' ? OPENCODE_JEV_PRESETS : OPENROUTER_JEV_PRESETS;
+
+    if (!targetBrainPresets.some((p) => p.id === brainModel) && brainModel !== 'custom') {
+      const defBrain = targetBrainPresets[0].id;
+      setBrainModel(defBrain);
+      StorageService.setBrainModel(defBrain);
+    }
+    if (!targetJevPresets.some((p) => p.id === jevModel) && jevModel !== 'custom') {
+      const defJev = targetJevPresets[0].id;
+      setJevModel(defJev);
+      StorageService.setJevModel(defJev);
+    }
   };
 
   const handleTestKey = async () => {
@@ -73,7 +109,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       const res = await aiTraderService.testApiKey(apiKey);
       setTestResult(res);
     } catch (e: any) {
-      setTestResult({ ok: false, message: `Błąd: ${e.message}` });
+      setTestResult({ ok: false, message: `Błąd: ${e.message}`, provider: activeProvider });
     } finally {
       setIsTestingKey(false);
     }
@@ -755,17 +791,34 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
         {/* ----------------- TAB 3: SETTINGS ----------------- */}
         {activeTab === 'settings' && (
           <div className="space-y-4">
-            {/* OpenRouter API Key Input */}
+            {/* API Key Input & Provider Indicator */}
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-white block">
-                Klucz API OpenRouter
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-white block">
+                  Klucz API ({activeProvider === 'opencode' ? 'OpenCode Go / Console' : 'OpenRouter'})
+                </label>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 border ${
+                    activeProvider === 'opencode'
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                      : 'bg-purple-500/15 text-purple-400 border-purple-500/30'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      activeProvider === 'opencode' ? 'bg-emerald-400' : 'bg-purple-400'
+                    }`}
+                  />
+                  {activeProvider === 'opencode' ? 'OpenCode Go' : 'OpenRouter'}
+                </span>
+              </div>
+
               <div className="relative">
                 <input
                   type={showApiKey ? 'text' : 'password'}
                   value={apiKey}
                   onChange={(e) => handleApiKeyChange(e.target.value)}
-                  placeholder="sk-or-v1-..."
+                  placeholder="oc_sk_... (OpenCode) lub sk-or-... (OpenRouter)"
                   className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white placeholder-[#868993] outline-none font-mono pr-10"
                 />
                 <button
@@ -789,13 +842,13 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   <span>{isTestingKey ? 'Sprawdzanie...' : '🔍 Przetestuj Klucz API'}</span>
                 </button>
                 <span className="text-[10px] text-[#868993]">
-                  Automatycznie usuwa zbędne "Bearer" i cudzysłowy.
+                  Wykrywa OpenCode (`oc_sk_`) oraz OpenRouter (`sk-or-`).
                 </span>
               </div>
 
               {testResult && (
                 <div
-                  className={`p-2 rounded-lg text-xs font-medium border ${
+                  className={`p-2.5 rounded-lg text-xs font-medium border ${
                     testResult.ok
                       ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
                       : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
@@ -812,15 +865,20 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
             {/* Brain Model Selector */}
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-white block">
-                🧠 Model Mózgu (Strategia + Vision)
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-white block">
+                  🧠 Model Mózgu (Strategia + Vision)
+                </label>
+                <span className="text-[10px] text-[#868993]">
+                  {activeProvider === 'opencode' ? 'Katalog OpenCode Go' : 'Katalog OpenRouter'}
+                </span>
+              </div>
               <select
                 value={brainModel}
                 onChange={(e) => setBrainModel(e.target.value)}
                 className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none"
               >
-                {BRAIN_MODEL_PRESETS.map((p) => (
+                {brainPresets.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>
@@ -832,7 +890,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   type="text"
                   value={customBrainModel}
                   onChange={(e) => setCustomBrainModel(e.target.value)}
-                  placeholder="Wpisz identyfikator (np. anthropic/claude-3.5-sonnet)..."
+                  placeholder="Wpisz identyfikator (np. deepseek-v4.1-flash)..."
                   className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono mt-1"
                 />
               )}
@@ -840,15 +898,20 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
             {/* Jev Model Selector */}
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-white block">
-                🛡️ Model Jev (Egzekutor / Strażnik 1m)
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-white block">
+                  🛡️ Model Jev (Egzekutor / Strażnik 1m)
+                </label>
+                <span className="text-[10px] text-[#868993]">
+                  Błyskawiczna analiza co 60s
+                </span>
+              </div>
               <select
                 value={jevModel}
                 onChange={(e) => setJevModel(e.target.value)}
                 className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none"
               >
-                {JEV_MODEL_PRESETS.map((p) => (
+                {jevPresets.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
                   </option>

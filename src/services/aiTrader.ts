@@ -120,22 +120,7 @@ export interface AISettings {
   autoSentinel: boolean;
 }
 
-export const BRAIN_MODEL_PRESETS = [
-  { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5 ($3.00/1M - Rekomendowany Mózg)', isRecommended: true },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5 ($2.00/1M)', isRecommended: false },
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5 ($2.00/1M)', isRecommended: false },
-  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro ($2.00/1M)', isRecommended: false },
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash ($1.50/1M)', isRecommended: false },
-  { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision ($0.14/1M)', isRecommended: false },
-  { id: 'nemotron-3.5-super-vl-free', name: 'Nemotron 3.5 Super VL ($0.00 / Free)', isRecommended: false },
-  { id: 'custom', name: 'Inny / Własny model...', isRecommended: false },
-];
-
-export const JEV_MODEL_PRESETS = [
-  { id: 'jev-1.13-free', name: 'Jev 1.13 Free ($0.00 / Free - Rekomendowany)', isRecommended: true },
-  { id: 'jev-1.13', name: 'Jev 1.13 ($0.04/1M in, $0 out)', isRecommended: false },
-  { id: 'custom', name: 'Inny / Własny identyfikator...', isRecommended: false },
-];
+export type AIProvider = 'opencode' | 'openrouter';
 
 export function cleanApiKey(rawKey: string): string {
   if (!rawKey) return '';
@@ -143,6 +128,90 @@ export function cleanApiKey(rawKey: string): string {
   key = key.replace(/^["']+|["']+$/g, '');
   key = key.replace(/^Bearer\s+/i, '');
   return key.trim();
+}
+
+export function detectProvider(apiKey: string): AIProvider {
+  const clean = cleanApiKey(apiKey);
+  if (clean.startsWith('oc_sk_')) {
+    return 'opencode';
+  }
+  return 'openrouter';
+}
+
+export const OPENCODE_BRAIN_PRESETS = [
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (Vision + Błyskawiczny - Rekomendowany)', isRecommended: true },
+  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro (Głębokie rozumowanie)', isRecommended: false },
+  { id: 'kimi-k3', name: 'Kimi K3 (Vision + 1M Context)', isRecommended: false },
+  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash (Vision + Niski koszt)', isRecommended: false },
+  { id: 'longcat-2.5-preview-free', name: 'LongCat 2.5 Preview (Darmowy / Free)', isRecommended: false },
+  { id: 'beam-free', name: 'Beam Free (Darmowy / Free)', isRecommended: false },
+  { id: 'space-bunny', name: 'Space Bunny', isRecommended: false },
+  { id: 'custom', name: 'Inny model OpenCode...', isRecommended: false },
+];
+
+export const OPENCODE_JEV_PRESETS = [
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (~150ms - Rekomendowany Egzekutor)', isRecommended: true },
+  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash (Ultra szybki)', isRecommended: false },
+  { id: 'beam-free', name: 'Beam Free ($0.00 / Free)', isRecommended: false },
+  { id: 'longcat-2.5-preview-free', name: 'LongCat 2.5 ($0.00 / Free)', isRecommended: false },
+  { id: 'space-bunny', name: 'Space Bunny', isRecommended: false },
+  { id: 'custom', name: 'Inny identyfikator Jeva...', isRecommended: false },
+];
+
+export const OPENROUTER_BRAIN_PRESETS = [
+  { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet (Rekomendowany Mózg)', isRecommended: true },
+  { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash (Błyskawiczny)', isRecommended: false },
+  { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', isRecommended: false },
+  { id: 'custom', name: 'Inny model OpenRouter...', isRecommended: false },
+];
+
+export const OPENROUTER_JEV_PRESETS = [
+  { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash (Rekomendowany Egzekutor)', isRecommended: true },
+  { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', isRecommended: false },
+  { id: 'custom', name: 'Własny identyfikator Jeva...', isRecommended: false },
+];
+
+// Backward-compatible fallback presets
+export const BRAIN_MODEL_PRESETS = OPENCODE_BRAIN_PRESETS;
+export const JEV_MODEL_PRESETS = OPENCODE_JEV_PRESETS;
+
+export function getProviderConfig(apiKey: string): {
+  provider: AIProvider;
+  chatUrl: string;
+  testUrl: string;
+  headers: Record<string, string>;
+} {
+  const clean = cleanApiKey(apiKey);
+  const provider = detectProvider(clean);
+  const isDev = import.meta.env.DEV;
+
+  if (provider === 'opencode') {
+    const base = isDev ? '/api/opencode' : 'https://opencode.ai';
+    return {
+      provider,
+      chatUrl: `${base}/inference/go/openai/v1/chat/completions`,
+      testUrl: `${base}/console/api/v2/config`,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${clean}`,
+        'x-opencode-session': `openview-session-${Date.now()}`,
+        'User-Agent': 'openview-copilot/1.0',
+      },
+    };
+  } else {
+    const base = isDev ? '/api/openrouter' : 'https://openrouter.ai';
+    return {
+      provider,
+      chatUrl: `${base}/api/v1/chat/completions`,
+      testUrl: `${base}/api/v1/auth/key`,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${clean}`,
+        'HTTP-Referer': 'https://openview.local',
+        'X-Title': 'OpenView Crypto AI Copilot',
+      },
+    };
+  }
 }
 
 function getHigherTimeframes(currentInterval: string): { macro: string; structure: string } {
@@ -533,14 +602,11 @@ Return strictly the JSON trade plan.`,
       });
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const config = getProviderConfig(cleanKey);
+
+    const response = await fetch(config.chatUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cleanKey}`,
-        'HTTP-Referer': 'https://openview.local',
-        'X-Title': 'OpenView Crypto AI Copilot',
-      },
+      headers: config.headers,
       body: JSON.stringify({
         model,
         messages: [
@@ -553,10 +619,17 @@ Return strictly the JSON trade plan.`,
 
     if (!response.ok) {
       const errText = await response.text();
-      let errorMsg = `OpenRouter API Błąd (${response.status})`;
+      let errorMsg = `${config.provider === 'opencode' ? 'OpenCode' : 'OpenRouter'} API Błąd (${response.status})`;
       try {
         const errJson = JSON.parse(errText);
-        if (errJson.error?.message) errorMsg = errJson.error.message;
+        const rawMsg = errJson.error?.message || errJson.message || '';
+        if (rawMsg.includes('Insufficient account funds')) {
+          errorMsg = 'Brak środków na koncie OpenCode (Insufficient account funds). Doładuj konto na opencode.ai lub skorzystaj z modeli w pakiecie OpenCode Go (np. deepseek-v4.1-flash, beam-free, kimi-k3).';
+        } else if (errJson.error?.type === 'FreeTierError' || rawMsg.includes('FreeTierError')) {
+          errorMsg = 'Model -free poza OpenCode Go jest zablokowany poza oficjalną aplikacją OpenCode. Użyj modelu deepseek-v4.1-flash lub beam-free z OpenCode Go.';
+        } else if (rawMsg) {
+          errorMsg = `${config.provider === 'opencode' ? 'OpenCode' : 'OpenRouter'}: ${rawMsg}`;
+        }
       } catch (e) {
         if (errText) errorMsg += `: ${errText.slice(0, 150)}`;
       }
@@ -669,17 +742,14 @@ Respond ONLY with this exact JSON format without markdown fences:
 
     const cleanKey = cleanApiKey(apiKey);
     if (!cleanKey || cleanKey === 'undefined' || cleanKey === 'null') {
-      throw new Error('Klucz OpenRouter API Key jest pusty lub niepoprawny.');
+      throw new Error('Klucz API jest pusty lub niepoprawny.');
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const config = getProviderConfig(cleanKey);
+
+    const response = await fetch(config.chatUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cleanKey}`,
-        'HTTP-Referer': 'https://openview.local',
-        'X-Title': 'OpenView Crypto Jev Sentinel',
-      },
+      headers: config.headers,
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
@@ -724,34 +794,74 @@ Respond ONLY with this exact JSON format without markdown fences:
     return cleanApiKey(rawKey);
   }
 
+  detectProvider(rawKey: string): AIProvider {
+    return detectProvider(rawKey);
+  }
+
   /**
-   * Verify OpenRouter API key validity against official auth/key endpoint
+   * Verify API key validity against official endpoint (OpenCode or OpenRouter)
    */
-  async testApiKey(rawKey: string): Promise<{ ok: boolean; message: string }> {
+  async testApiKey(rawKey: string): Promise<{ ok: boolean; message: string; provider: AIProvider }> {
     const clean = cleanApiKey(rawKey);
     if (!clean || clean === 'undefined' || clean === 'null') {
-      return { ok: false, message: 'Wprowadź klucz API (np. sk-or-v1-...)' };
+      return { ok: false, message: 'Wprowadź klucz API (np. oc_sk_... lub sk-or-...)', provider: 'openrouter' };
     }
-    try {
-      const res = await fetch('https://openrouter.ai/api/v1/auth/key', {
-        headers: {
-          Authorization: `Bearer ${clean}`,
-        },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const d = json.data;
-        const label = d?.label || 'Klucz aktywny';
-        const usage = typeof d?.usage === 'number' ? `$${d.usage.toFixed(2)}` : '$0.00';
-        const limit = d?.limit !== null && d?.limit !== undefined ? `$${d.limit}` : 'Bez limitu';
-        return { ok: true, message: `✅ Połączono! (${label} | Zużycie: ${usage} / Limit: ${limit})` };
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        const msg = errJson.error?.message || `Błąd autoryzacji (${res.status})`;
-        return { ok: false, message: `❌ ${msg}` };
+    const provider = detectProvider(clean);
+
+    if (provider === 'opencode') {
+      try {
+        const baseUrl = import.meta.env.DEV ? '/api/opencode' : 'https://opencode.ai';
+        const res = await fetch(`${baseUrl}/console/api/v2/config`, {
+          headers: {
+            Authorization: `Bearer ${clean}`,
+          },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          const hasGo = !!json.providers?.['opencode-go'];
+          const modelsCount = hasGo ? Object.keys(json.providers['opencode-go'].models || {}).length : 0;
+          return {
+            ok: true,
+            message: hasGo
+              ? `✅ Połączono z OpenCode Go! (Subskrypcja aktywna, ${modelsCount} modeli gotowych do działania)`
+              : '✅ Połączono z OpenCode Console! (Klucz aktywny)',
+            provider: 'opencode',
+          };
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          const msg = errJson.error?.message || errJson.message || `Błąd autoryzacji OpenCode (${res.status})`;
+          return { ok: false, message: `❌ ${msg}`, provider: 'opencode' };
+        }
+      } catch (e: any) {
+        return { ok: false, message: `❌ Błąd sieci OpenCode: ${e.message}`, provider: 'opencode' };
       }
-    } catch (e: any) {
-      return { ok: false, message: `❌ Błąd sieci: ${e.message}` };
+    } else {
+      try {
+        const baseUrl = import.meta.env.DEV ? '/api/openrouter' : 'https://openrouter.ai';
+        const res = await fetch(`${baseUrl}/api/v1/auth/key`, {
+          headers: {
+            Authorization: `Bearer ${clean}`,
+          },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          const d = json.data;
+          const label = d?.label || 'Klucz aktywny';
+          const usage = typeof d?.usage === 'number' ? `$${d.usage.toFixed(2)}` : '$0.00';
+          const limit = d?.limit !== null && d?.limit !== undefined ? `$${d.limit}` : 'Bez limitu';
+          return {
+            ok: true,
+            message: `✅ Połączono z OpenRouter! (${label} | Zużycie: ${usage} / Limit: ${limit})`,
+            provider: 'openrouter',
+          };
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          const msg = errJson.error?.message || `Błąd autoryzacji OpenRouter (${res.status})`;
+          return { ok: false, message: `❌ ${msg}`, provider: 'openrouter' };
+        }
+      } catch (e: any) {
+        return { ok: false, message: `❌ Błąd sieci OpenRouter: ${e.message}`, provider: 'openrouter' };
+      }
     }
   }
 
