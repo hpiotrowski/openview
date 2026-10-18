@@ -710,33 +710,26 @@ class AITraderService {
       throw new Error('Klucz OpenRouter API Key jest pusty lub niepoprawny. Wklej swój klucz w zakładce Ustawienia (np. sk-or-v1-...).');
     }
 
-    const systemPrompt = `You are an elite, institutional crypto proprietary trader and quantitative strategist specialized in Multi-Timeframe Top-Down Analysis (Macro HTF -> Structure HTF -> Execution LTF), Smart Money Concepts (SMC), Volume Profile (POC/VAH/VAL), Cumulative Volume Delta (CVD & Smart Money Absorptions), Virgin/Naked POCs, Session Liquidity Sweeps (PDH/PDL, Monday Range), Liquidation Heatmap Clusters, and Market Cipher B (WaveTrend & MFI).
+    const systemPrompt = `You are an elite, institutional crypto proprietary trader.
+Your mission is to analyze the multi-timeframe quantitative market data, institutional order flow metrics, and the attached high-fidelity chart screenshots for ${snapshot.symbol} (Execution timeframe: ${snapshot.interval}, Live Market Price: $${snapshot.currentPrice}).
 
-Your objective:
-Analyze the provided multi-timeframe quantitative metrics, institutional order flow filters, AND the attached background-rendered chart screenshots for ${snapshot.symbol} (Execution on ${snapshot.interval}, LIVE MARKET PRICE: $${snapshot.currentPrice}).
-Formulate a concrete, institutional trade setup with a minimum Risk:Reward of 1:2.5.
-If the market is currently chopping in no-man's land, sitting right on opposite support/demand, or has no high-probability edge from the current price, YOU MUST respond with direction: "NEUTRAL".
+OBJECTIVE:
+Formulate the most logical, high-expectancy trading plan based on real market structure (SMC, Order Blocks, Liquidity Sweeps, CVD absorptions, Volume Profile, and Market Cipher B).
+If the market is in erratic consolidation, low-conviction chop, or lacks a clear statistical edge from the current market structure, choose direction: "NEUTRAL". Capital preservation is priority #1.
 
-TOP-DOWN MULTI-TIMEFRAME & INSTITUTIONAL RULES:
-1. Macro Alignment: Align execution with the Macro HTF regime. Do not fight strong higher-timeframe momentum unless playing a confirmed rejection or liquidity sweep at an HTF extreme.
-2. Direction must be "LONG", "SHORT", or "NEUTRAL".
-3. Order Flow & CVD Divergences: Look for passive limit order absorption (e.g., Bullish CVD divergence where price forms lower lows or equal lows while CVD trends upwards, indicating aggressive spot/taker selling is being absorbed by smart money limit buys).
-4. Unmitigated Targets (Naked POCs & Liquidation Clusters): Use Virgin / Naked POCs and Liquidation Heatmap clusters (50x/100x leverage pools) as high-probability magnet targets for TP1 / TP2.
-5. Session Liquidity (PDH / PDL / Monday Range): Note if price has swept Previous Day High (PDH) or Previous Day Low (PDL) to hunt retail stops before reversing.
-6. ENTRY ZONES & RETRACEMENT LOGIC (SMART MONEY LIMIT ENTRIES):
-   - Current Live Price is $${snapshot.currentPrice}.
-   - Real institutional SMC traders DO NOT chase green candles with market orders at the top of an impulsive expansion!
-   - You should plan high-probability entries at an unmitigated SMC level (Bullish/Bearish Order Block, Demand/Supply Zone, Fair Value Gap, or Session Retest):
-     * For a LONG: entryPrice can be AT current price (if price is already testing a demand zone) OR on a LIMIT PULLBACK below current price ($${Math.round(snapshot.currentPrice * 0.955 * 100) / 100} <= entryPrice <= $${snapshot.currentPrice}, i.e. 0.1% to 4.5% pullback). StopLoss MUST be strictly < entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly > entryPrice AND > currentPrice ($${snapshot.currentPrice})!
-     * For a SHORT: entryPrice can be AT current price (if price is already testing a supply zone) OR on a LIMIT PULLBACK above current price ($${snapshot.currentPrice} <= entryPrice <= $${Math.round(snapshot.currentPrice * 1.045 * 100) / 100}, i.e. 0.1% to 4.5% bounce). StopLoss MUST be strictly > entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly < entryPrice AND < currentPrice ($${snapshot.currentPrice})!
-   - Support/Demand awareness:
-     * DO NOT propose a SHORT if price is currently sitting right on a major DEMAND zone or if Cipher B is deeply oversold (WT1 <= -40) — that is selling the bottom.
-     * DO NOT propose a LONG if price is currently hitting a major SUPPLY zone or if Cipher B is deeply overbought (WT1 >= +40).
-   - If the nearest valid level is too far (>5%), or if market is chopping without edge, RETURN direction: "NEUTRAL". A NEUTRAL plan is the mark of a seasoned professional trader.
-7. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
-8. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
+TRADING GUIDELINES:
+1. Direction: "LONG", "SHORT", or "NEUTRAL".
+2. Order Location & Execution:
+   - Formulate a realistic, actionable entry plan that makes sense in the current market context.
+   - You may propose an entry near current market price (if price is currently reacting to/retesting a key level), OR a limit order on a natural pullback/retest into an unmitigated Order Block, Fair Value Gap (FVG), or Demand/Supply zone.
+   - Avoid proposing distant levels that have no relevance to the current price action.
+3. Logical Risk Management:
+   - For LONG: Stop Loss must be placed below a logical structural invalidation level (e.g. recent swing low or Order Block base). Targets (TP1, TP2) must offer a positive risk-to-reward ratio.
+   - For SHORT: Stop Loss must be placed above a logical structural invalidation level (e.g. recent swing high or Order Block top). Targets (TP1, TP2) must offer a positive risk-to-reward ratio.
+4. Summary & Thesis:
+   - Provide a concise, clear explanation in Polish explaining the technical thesis behind the trade (why this level, what liquidity was swept, what Cipher B / CVD confirms).
 
-Return ONLY a pure, valid JSON object matching this TypeScript interface without any markdown code fences, comments, or extra text:
+Return ONLY a pure, valid JSON object matching this schema without any markdown code fences, comments, or extra text:
 {
   "direction": "LONG" | "SHORT" | "NEUTRAL",
   "confidence": number (1-100),
@@ -761,13 +754,6 @@ Return ONLY a pure, valid JSON object matching this TypeScript interface without
     "wtCondition": string,
     "mfiTrend": "INFLOW" | "OUTFLOW" | "NEUTRAL",
     "expectedTrigger": string
-  },
-  "jevCriteria": {
-    "targetZoneMin": number,
-    "targetZoneMax": number,
-    "requiredCipherSignal": "GREEN_DOT" | "RED_DOT" | "GOLD_DOT" | "MFI_ABOVE_ZERO" | "NONE",
-    "invalidationPrice": number,
-    "executionTrigger": string
   }
 }`;
 
@@ -1014,32 +1000,26 @@ Return strictly the JSON trade plan.`,
       appliedToChart: false,
     };
 
-    // Safety & Sanity Guard against hallucinated, distant, or illogical trade levels
+    // Logical Sanity Guard (only filter out mathematically broken numbers or extreme hallucinations)
     if (plan.direction === 'SHORT') {
-      const isTpAboveCurrent = plan.setup.takeProfit1 >= plan.setup.entryPrice;
-      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.05;
-      if (isTpAboveCurrent || isEntryTooFar) {
-        console.warn('AI generated an invalid or distant SHORT setup, falling back to NEUTRAL:', {
-          entry: plan.setup.entryPrice,
-          tp1: plan.setup.takeProfit1,
-          current: snapshot.currentPrice,
-        });
+      const isTpIllogical = plan.setup.takeProfit1 >= plan.setup.entryPrice;
+      const isSlIllogical = plan.setup.stopLoss <= plan.setup.entryPrice;
+      const isEntryExtremelyFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.08;
+      if (isTpIllogical || isSlIllogical || isEntryExtremelyFar) {
+        console.warn('AI generated an illogical SHORT setup:', plan.setup);
         plan.direction = 'NEUTRAL';
-        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na strefę`;
-        plan.summary = `Bieżąca cena ($${snapshot.currentPrice}) znajduje się w strefie wsparcia/popytu lub zbyt daleko od oporu ($${plan.setup.entryPrice}). Cel TP ($${plan.setup.takeProfit1}) byłby nielogiczny dla pozycji krótkiej przy cenie rynkowej. AI zaleca cierpliwość.`;
+        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na klarowność`;
+        plan.summary = `Brak spójnego układu poziomów dla pozycji krótkiej (błędna relacja celu lub stop lossa). Zalecane oczekiwanie na nową strukturę.`;
       }
     } else if (plan.direction === 'LONG') {
-      const isTpBelowCurrent = plan.setup.takeProfit1 <= plan.setup.entryPrice;
-      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.05;
-      if (isTpBelowCurrent || isEntryTooFar) {
-        console.warn('AI generated an invalid or distant LONG setup, falling back to NEUTRAL:', {
-          entry: plan.setup.entryPrice,
-          tp1: plan.setup.takeProfit1,
-          current: snapshot.currentPrice,
-        });
+      const isTpIllogical = plan.setup.takeProfit1 <= plan.setup.entryPrice;
+      const isSlIllogical = plan.setup.stopLoss >= plan.setup.entryPrice;
+      const isEntryExtremelyFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.08;
+      if (isTpIllogical || isSlIllogical || isEntryExtremelyFar) {
+        console.warn('AI generated an illogical LONG setup:', plan.setup);
         plan.direction = 'NEUTRAL';
-        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na strefę`;
-        plan.summary = `Bieżąca cena ($${snapshot.currentPrice}) znajduje się zbyt daleko od strefy popytu ($${plan.setup.entryPrice}) lub cel TP byłby poniżej ceny rynkowej. AI zaleca oczekiwanie na retest.`;
+        plan.title = `${snapshot.symbol} NEUTRAL - Oczekiwanie na klarowność`;
+        plan.summary = `Brak spójnego układu poziomów dla pozycji długiej (błędna relacja celu lub stop lossa). Zalecane oczekiwanie na nową strukturę.`;
       }
     }
 
