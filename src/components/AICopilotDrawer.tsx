@@ -4,7 +4,6 @@ import {
   ShieldAlert,
   Settings,
   X,
-  Play,
   CheckCircle2,
   AlertTriangle,
   Clock,
@@ -14,9 +13,7 @@ import {
   ArrowDownRight,
   Eye,
   EyeOff,
-  Volume2,
   RefreshCw,
-  ExternalLink,
   Target,
   Zap,
   Activity,
@@ -25,6 +22,8 @@ import {
   TrendingDown,
   Shield,
   Cpu,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   aiTraderService,
@@ -61,6 +60,21 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   onSelectSymbol,
 }) => {
   const [activeTab, setActiveTab] = useState<'brain' | 'sentinel' | 'settings'>('brain');
+
+  // Kronos Health Status
+  const [kronosOnline, setKronosOnline] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/kronos/health')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        setKronosOnline(data?.ready === true);
+      })
+      .catch(() => {
+        setKronosOnline(false);
+      });
+  }, [isOpen]);
 
   // Settings State
   const [apiKey, setApiKey] = useState(() => StorageService.getOpenRouterKey());
@@ -128,11 +142,12 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState<string>('');
   const [activePlan, setActivePlan] = useState<TradingPlan | null>(() => {
-    const plans = StorageService.getSavedPlans();
-    return plans.length > 0 ? plans[0] : null;
+    const savedPlans = StorageService.getSavedPlans();
+    return savedPlans.length > 0 ? savedPlans[0] : null;
   });
   const [capturedSnapshot, setCapturedSnapshot] = useState<MarketSnapshot | null>(null);
   const [snapshotViewTab, setSnapshotViewTab] = useState<'exec' | 'htf'>('exec');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [appliedToast, setAppliedToast] = useState(false);
   const [autoFrameToast, setAutoFrameToast] = useState(false);
@@ -159,14 +174,6 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
     return unsub;
   }, []);
 
-  // Sentinel State
-  const [sentinelEnabled, setSentinelEnabled] = useState(() => StorageService.getAutoSentinel());
-  const [isSentinelScanning, setIsSentinelScanning] = useState(false);
-  const [lastDecision, setLastDecision] = useState<JevDecision | null>(null);
-  const [sentinelLogs, setSentinelLogs] = useState<JevDecision[]>(() => aiTraderService.getSentinelLogs());
-  const [scanCountdown, setScanCountdown] = useState<number>(60);
-  const sentinelTimerRef = useRef<any>(null);
-
   // Save settings when changed
   const handleSaveSettings = () => {
     const finalBrain = brainModel === 'custom' && customBrainModel ? customBrainModel : brainModel;
@@ -189,7 +196,8 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
     setIsAnalyzing(true);
     setErrorMsg(null);
-    setAnalysisStep('1. Pobieranie danych & renderowanie 15m i 4h w tle...');
+    setShowAdvanced(false);
+    setAnalysisStep('Pobieranie wykresu i uruchamianie podwójnej weryfikacji...');
 
     try {
       const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, true);
@@ -198,7 +206,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       }
       setCapturedSnapshot(snapshot);
 
-      setAnalysisStep('2. Analiza Top-Down (4h Makro, 15m, CVD, nPOC, HTF & Cipher B)...');
+      setAnalysisStep('Analiza SMC + symulacje Monte Carlo Kronos...');
       const effectiveBrainModel =
         brainModel === 'custom' && customBrainModel ? customBrainModel : brainModel;
 
@@ -209,8 +217,10 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       });
 
       setActivePlan(plan);
-      // Add to 1:1 Guard & auto-draw on chart immediately
-      setupGuardService.addPlan(plan, true);
+      // Add to 1:1 Guard & auto-draw on chart if setup is valid
+      if (plan.direction !== 'NEUTRAL') {
+        setupGuardService.addPlan(plan, true);
+      }
     } catch (err: any) {
       console.error('Brain analysis error:', err);
       setErrorMsg(err.message || 'Wystąpił błąd podczas analizy rynku.');
@@ -274,77 +284,6 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
     }
   };
 
-  // Sentinel manual scan
-  const handleSentinelScan = async () => {
-    if (!activePlan) return;
-    if (!apiKey.trim()) {
-      setErrorMsg('Wprowadź klucz OpenRouter API Key w ustawieniach.');
-      return;
-    }
-
-    setIsSentinelScanning(true);
-    try {
-      const snapshot = await aiTraderService.gatherMarketSnapshot(activeChartId, false);
-      if (!snapshot) return;
-
-      const effectiveJevModel = jevModel === 'custom' && customJevModel ? customJevModel : jevModel;
-      const decision = await aiTraderService.evaluateJevSentinel({
-        apiKey,
-        model: effectiveJevModel,
-        plan: activePlan,
-        snapshot,
-      });
-
-      setLastDecision(decision);
-      aiTraderService.notifySentinel(decision);
-      setSentinelLogs(aiTraderService.getSentinelLogs());
-    } catch (e: any) {
-      console.warn('Sentinel scan error:', e);
-    } finally {
-      setIsSentinelScanning(false);
-      setScanCountdown(60);
-    }
-  };
-
-  // Auto-Sentinel 60s Interval Loop
-  useEffect(() => {
-    if (!sentinelEnabled || !activePlan) {
-      if (sentinelTimerRef.current) {
-        clearInterval(sentinelTimerRef.current);
-        sentinelTimerRef.current = null;
-      }
-      return;
-    }
-
-    // Run immediately on enable
-    handleSentinelScan();
-
-    const interval = setInterval(() => {
-      setScanCountdown((prev) => {
-        if (prev <= 1) {
-          handleSentinelScan();
-          return 60;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    sentinelTimerRef.current = interval;
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [sentinelEnabled, activePlan, activeChartId, apiKey, jevModel]);
-
-  // Subscribe to Sentinel logs
-  useEffect(() => {
-    const unsub = aiTraderService.subscribeSentinel((dec) => {
-      setLastDecision(dec);
-      setSentinelLogs(aiTraderService.getSentinelLogs());
-    });
-    return unsub;
-  }, []);
-
   if (!isOpen) return null;
 
   return (
@@ -352,76 +291,79 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       {/* Drawer Header */}
       <div className="h-12 border-b border-[#2a2e39] px-4 flex items-center justify-between bg-[#1e222d]">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#2962ff] to-[#7c4dff] flex items-center justify-center text-white shadow-md">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-[#2962ff] to-[#00b0ff] flex items-center justify-center text-white shadow-md">
             <Brain size={16} />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-white text-sm">AI Copilot</span>
-              <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-[#2962ff]/20 text-[#2962ff] border border-[#2962ff]/40">
-                Dual-Layer
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-white text-sm tracking-wide">AI Copilot</span>
+            {kronosOnline ? (
+              <span
+                title="Model Kronos-base działa w tle i aktywnie weryfikuje każdy setup"
+                className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 flex items-center gap-1.5"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                Kronos 102M A+
               </span>
-            </div>
+            ) : (
+              <span
+                title="Kronos jest wyłączony. Uruchom kontener w Docker Desktop, aby aktywować podwójną weryfikację."
+                className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-500/15 border border-gray-500/30 text-gray-400 flex items-center gap-1.5"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+                Kronos Offline
+              </span>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {sentinelEnabled && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Jev 1m</span>
-            </div>
-          )}
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-[#2a2e39] text-[#868993] hover:text-white transition-colors"
-          >
-            <X size={16} />
-          </button>
-        </div>
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded hover:bg-[#2a2e39] text-[#868993] hover:text-white transition-colors"
+          title="Zamknij panel"
+        >
+          <X size={16} />
+        </button>
       </div>
 
-      {/* Navigation Tabs */}
+      {/* Navigation Tabs (Clear 3-tab layout) */}
       <div className="flex border-b border-[#2a2e39] bg-[#161a25] text-xs">
         <button
           onClick={() => setActiveTab('brain')}
-          className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
+          className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 font-bold transition-colors ${
             activeTab === 'brain'
               ? 'border-[#2962ff] text-white bg-[#1e222d]'
               : 'border-transparent text-[#868993] hover:text-[#d1d4dc]'
           }`}
         >
           <Sparkles size={13} className={activeTab === 'brain' ? 'text-[#2962ff]' : ''} />
-          <span>Mózg Strategii</span>
+          <span>⚡ Analiza</span>
         </button>
+
         <button
           onClick={() => setActiveTab('sentinel')}
-          className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 font-medium transition-colors relative ${
+          className={`flex-1 py-2.5 flex items-center justify-center gap-1.5 border-b-2 font-bold transition-colors relative ${
             activeTab === 'sentinel'
               ? 'border-[#089981] text-white bg-[#1e222d]'
               : 'border-transparent text-[#868993] hover:text-[#d1d4dc]'
           }`}
         >
-          <ShieldAlert size={13} className={activeTab === 'sentinel' ? 'text-[#089981]' : ''} />
-          <span>Radar Setupów</span>
-          {activePlansCount > 0 ? (
-            <span className="px-1.5 py-0.5 rounded-full bg-emerald-500 text-black text-[10px] font-black leading-none">
+          <Target size={13} className={activeTab === 'sentinel' ? 'text-[#089981]' : ''} />
+          <span>📡 Radar Rynku</span>
+          {activePlansCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-emerald-500 text-black text-[10px] font-black leading-none">
               {activePlansCount}
             </span>
-          ) : plans.length > 0 ? (
-            <span className="px-1.5 py-0.5 rounded-full bg-[#2a2e39] text-[#868993] text-[10px] font-semibold leading-none">
-              {plans.length}
-            </span>
-          ) : null}
+          )}
         </button>
+
         <button
           onClick={() => setActiveTab('settings')}
-          className={`py-2.5 px-3 flex items-center justify-center border-b-2 font-medium transition-colors ${
+          className={`py-2.5 px-3.5 flex items-center justify-center border-b-2 font-medium transition-colors ${
             activeTab === 'settings'
               ? 'border-[#7c4dff] text-white bg-[#1e222d]'
               : 'border-transparent text-[#868993] hover:text-[#d1d4dc]'
           }`}
-          title="Ustawienia OpenRouter & Modele"
+          title="Ustawienia API i Modele"
         >
           <Settings size={14} className={activeTab === 'settings' ? 'text-[#7c4dff]' : ''} />
         </button>
@@ -433,7 +375,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
           <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-start gap-2 animate-in fade-in">
             <AlertTriangle size={15} className="shrink-0 mt-0.5" />
             <div className="flex-1">
-              <span className="font-semibold block mb-0.5">Uwaga:</span>
+              <span className="font-semibold block mb-0.5">Informacja:</span>
               <span>{errorMsg}</span>
             </div>
             <button onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-white">
@@ -449,451 +391,389 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
           </div>
         )}
 
-        {/* ----------------- TAB 1: BRAIN STRATEGIST ----------------- */}
+        {/* ===================== TAB 1: ⚡ ANALIZA WYKRESU ===================== */}
         {activeTab === 'brain' && (
           <div className="space-y-4">
-            {/* Asset Status Card */}
-            <div className="p-3 bg-[#1e222d] border border-[#2a2e39] rounded-xl flex items-center justify-between">
+            {/* Asset Header Bar */}
+            <div className="p-3 bg-[#1e222d] border border-[#2a2e39] rounded-xl flex items-center justify-between shadow-sm">
               <div>
-                <span className="text-[11px] text-[#868993] block">Aktywny instrument</span>
-                <span className="font-bold text-white text-sm">{currentSymbol}</span>
-                <span className="text-xs text-[#868993] ml-1.5 font-medium">({currentInterval})</span>
-              </div>
-              <div className="text-right">
-                <span className="text-[11px] text-[#868993] block">Cena na żywo</span>
-                <span className="font-mono font-bold text-white text-sm">
-                  ${currentPrice ? currentPrice.toLocaleString() : '---'}
-                </span>
-              </div>
-            </div>
-
-            {/* Model Badge */}
-            <div className="flex items-center justify-between text-xs px-1">
-              <span className="text-[#868993]">Model Mózgu:</span>
-              <span className="font-mono text-[11px] bg-[#2a2e39] text-[#2962ff] px-2 py-0.5 rounded font-semibold border border-[#363c4e]">
-                {brainModel}
-              </span>
-            </div>
-
-            {/* Auto-Frame Button */}
-            <div className="space-y-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  const ok = aiTraderService.autoFrameActiveChart(activeChartId);
-                  if (ok) {
-                    setAutoFrameToast(true);
-                    setTimeout(() => setAutoFrameToast(false), 2200);
-                  }
-                }}
-                className="w-full py-2 px-3 rounded-lg bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 text-xs font-semibold text-white flex items-center justify-center gap-2 transition-all shadow-sm"
-                title="Automatycznie ustawia idealne przybliżenie (~85 świec), prawy margines i centruje na bieżącej cenie"
-              >
-                <Target size={14} className="text-[#2962ff]" />
-                <span>🎯 Dopasuj Kadr dla AI (Auto-Zoom)</span>
-              </button>
-
-              {autoFrameToast && (
-                <div className="p-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] flex items-center justify-center gap-1.5 animate-in fade-in">
-                  <CheckCircle2 size={13} className="text-emerald-400" />
-                  <span>Kadr dopasowany (~85 świec + margines prawy)!</span>
+                <span className="text-[10px] text-[#868993] uppercase font-semibold block">Wykres</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-black text-white text-base font-mono">{currentSymbol}</span>
+                  <span className="text-xs text-[#2962ff] font-bold bg-[#2962ff]/10 px-1.5 py-0.5 rounded border border-[#2962ff]/30">
+                    {currentInterval}
+                  </span>
                 </div>
-              )}
+              </div>
+
+              <div className="text-right flex items-center gap-2">
+                <div>
+                  <span className="text-[10px] text-[#868993] uppercase font-semibold block">Cena rynkowa</span>
+                  <span className="font-mono font-bold text-white text-sm">
+                    ${currentPrice ? currentPrice.toLocaleString() : '---'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ok = aiTraderService.autoFrameActiveChart(activeChartId);
+                    if (ok) {
+                      setAutoFrameToast(true);
+                      setTimeout(() => setAutoFrameToast(false), 2000);
+                    }
+                  }}
+                  className="p-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-[#868993] hover:text-white transition-colors"
+                  title="Dopasuj idealne przybliżenie wykresu (~85 świec)"
+                >
+                  <Target size={14} className="text-[#2962ff]" />
+                </button>
+              </div>
             </div>
 
-            {/* Plan Generation Button */}
+            {autoFrameToast && (
+              <div className="p-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] flex items-center justify-center gap-1.5 animate-in fade-in">
+                <CheckCircle2 size={13} className="text-emerald-400" />
+                <span>Kadr wykresu wycentrowany!</span>
+              </div>
+            )}
+
+            {/* Main Action Button */}
             <button
               onClick={handleGeneratePlan}
               disabled={isAnalyzing}
-              className={`w-full py-3 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all ${
+              className={`w-full py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 shadow-lg transition-all ${
                 isAnalyzing
                   ? 'bg-[#2962ff]/50 text-white cursor-not-allowed'
-                  : 'bg-gradient-to-r from-[#2962ff] to-[#7c4dff] hover:from-[#1e53e5] hover:to-[#6d3ee8] text-white hover:shadow-[#2962ff]/20'
+                  : 'bg-gradient-to-r from-[#2962ff] via-[#1e53e5] to-[#7c4dff] hover:opacity-95 text-white hover:shadow-[#2962ff]/25 active:scale-[0.99]'
               }`}
             >
               {isAnalyzing ? (
                 <>
-                  <RefreshCw size={15} className="animate-spin" />
-                  <span>{analysisStep || 'Analizowanie...'}</span>
+                  <RefreshCw size={15} className="animate-spin text-cyan-300" />
+                  <span className="truncate">{analysisStep || 'Analizowanie rynku...'}</span>
                 </>
               ) : (
                 <>
-                  <Brain size={16} />
-                  <span>🧠 Przeanalizuj Wykres & Zaplanuj Setup</span>
+                  <Sparkles size={16} className="text-cyan-300" />
+                  <span>⚡ Przeanalizuj Setup (Mózg + Kronos)</span>
                 </>
               )}
             </button>
 
-            {/* Generated Plan Result */}
+            {/* State A: No Plan Yet Placeholder */}
+            {!activePlan && !isAnalyzing && (
+              <div className="p-6 bg-[#161a25] border border-[#2a2e39] rounded-2xl text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-[#1e222d] border border-[#2a2e39] flex items-center justify-center mx-auto text-[#2962ff] shadow-inner">
+                  <Brain size={22} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white text-xs">Gotowy do analizy rynku</h4>
+                  <p className="text-[11px] text-[#868993] leading-relaxed max-w-[280px] mx-auto mt-1">
+                    Kliknij przycisk powyżej. Mózg AI zbada płynność i poziomy SMC, a Kronos sprawdzi kierunek pędu na 12 mld świec.
+                  </p>
+                </div>
+                <div className="pt-1 flex items-center justify-center gap-2 text-[10px] text-[#868993]">
+                  <span className="flex items-center gap-1">
+                    <CheckCircle2 size={11} className="text-emerald-400" /> 100% Zgody (A+)
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1">
+                    <Shield size={11} className="text-rose-400" /> Twarde VETO przy ryzyku
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* State B: Active Plan Result */}
             {activePlan && (
-              <div className="space-y-3 pt-2">
-                <div className="p-3.5 bg-[#1a1e29] border border-[#2a2e39] rounded-xl space-y-3 shadow-md">
-                  {/* Plan Header */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`px-2.5 py-1 rounded-md text-xs font-black uppercase tracking-wider ${
-                          activePlan.direction === 'LONG'
-                            ? 'bg-[#089981]/20 text-[#089981] border border-[#089981]/40'
-                            : activePlan.direction === 'SHORT'
-                            ? 'bg-[#f23645]/20 text-[#f23645] border border-[#f23645]/40'
-                            : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
-                        }`}
-                      >
-                        {activePlan.direction === 'LONG' ? (
-                          <span className="flex items-center gap-1">
-                            <ArrowUpRight size={14} /> LONG
-                          </span>
-                        ) : activePlan.direction === 'SHORT' ? (
-                          <span className="flex items-center gap-1">
-                            <ArrowDownRight size={14} /> SHORT
-                          </span>
-                        ) : (
-                          'NEUTRAL'
-                        )}
-                      </span>
-                      <span className="text-[11px] text-[#868993] font-medium">
-                        Pewność: {activePlan.confidence}%
-                      </span>
-                    </div>
-
-                    <div className="text-right">
-                      <span className="text-[10px] text-[#868993] uppercase block font-semibold">
-                        Risk : Reward
-                      </span>
-                      <span className="font-mono font-bold text-xs text-[#089981]">
-                        1 : {activePlan.setup.riskRewardRatio.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Title & Summary */}
-                  <div>
-                    <h4 className="font-bold text-white text-xs mb-1">{activePlan.title}</h4>
-                    <p className="text-[11px] text-[#868993] leading-relaxed">{activePlan.summary}</p>
-                  </div>
-
-                  {/* Multi-Timeframe Context Box */}
-                  {activePlan.htfContext && (
-                    <div className="p-2.5 rounded-lg bg-[#131722] border border-[#2a2e39] space-y-1.5 text-xs">
-                      <div className="flex items-center justify-between text-[10px] text-[#868993] font-semibold uppercase tracking-wider">
-                        <span className="flex items-center gap-1 text-[#2962ff]">
-                          <Layers size={12} /> Kontekst Multi-Timeframe (MTF)
+              <div className="space-y-3 animate-in fade-in duration-200">
+                {/* 1. DECISION BANNER (Sniper Verdict) */}
+                {activePlan.direction === 'NEUTRAL' ? (
+                  // VETO / NO TRADE STATE
+                  <div className="p-4 bg-[#1a1c23] border border-amber-500/30 rounded-2xl space-y-2.5 shadow-md">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-1 rounded-md text-xs font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5">
+                          <ShieldAlert size={14} className="text-amber-400" />
+                          BRAK SETUPU DO GRY
                         </span>
-                        <span className="text-gray-400">Top-Down Analysis</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
-                        <div className="p-2 rounded bg-[#1e222d] border border-[#2a2e39]/80">
-                          <div className="flex items-center justify-between text-[10px] mb-0.5">
-                            <span className="text-[#868993] font-sans font-semibold">
-                              Makro ({activePlan.htfContext.macro.timeframe})
-                            </span>
-                            <span
-                              className={`font-black ${
-                                activePlan.htfContext.macro.trend.includes('BULLISH')
-                                  ? 'text-emerald-400'
-                                  : activePlan.htfContext.macro.trend.includes('BEARISH')
-                                  ? 'text-rose-400'
-                                  : 'text-yellow-400'
-                              }`}
-                            >
-                              {activePlan.htfContext.macro.trend}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-[#868993]">
-                            WT: <strong className="text-white">{activePlan.htfContext.macro.wt1}</strong> | MFI: <strong className="text-white">{activePlan.htfContext.macro.mfi}</strong>
-                          </div>
-                          {activePlan.htfContext.macro.poc > 0 && (
-                            <div className="text-[10px] text-[#868993]">
-                              POC: ${activePlan.htfContext.macro.poc.toLocaleString()}
-                            </div>
-                          )}
-                        </div>
+                      <span className="text-[10px] uppercase font-bold text-[#868993] px-2 py-0.5 rounded bg-[#2a2e39]">
+                        Zasada Snajpera
+                      </span>
+                    </div>
 
-                        <div className="p-2 rounded bg-[#1e222d] border border-[#2a2e39]/80">
-                          <div className="flex items-center justify-between text-[10px] mb-0.5">
-                            <span className="text-[#868993] font-sans font-semibold">
-                              Struktura ({activePlan.htfContext.structure.timeframe})
-                            </span>
-                            <span
-                              className={`font-black ${
-                                activePlan.htfContext.structure.trend.includes('BULLISH')
-                                  ? 'text-emerald-400'
-                                  : activePlan.htfContext.structure.trend.includes('BEARISH')
-                                  ? 'text-rose-400'
-                                  : 'text-yellow-400'
-                              }`}
-                            >
-                              {activePlan.htfContext.structure.trend}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-[#868993]">
-                            Momentum: <strong className="text-white">{activePlan.htfContext.structure.momentum}</strong>
-                          </div>
-                          {activePlan.htfContext.structure.poc > 0 && (
-                            <div className="text-[10px] text-[#868993]">
-                              POC: ${activePlan.htfContext.structure.poc.toLocaleString()}
-                            </div>
-                          )}
-                        </div>
+                    <div className="p-3 bg-[#13151b] rounded-xl border border-[#2a2e39]/60">
+                      <p className="text-xs text-[#d1d4dc] leading-relaxed font-medium">
+                        {activePlan.summary}
+                      </p>
+                    </div>
+
+                    <div className="text-[10px] text-[#868993] flex items-center gap-1.5 pt-0.5">
+                      <CheckCircle2 size={12} className="text-emerald-400" />
+                      <span>Gotówka na koncie jest bezpieczna. Czekaj na idealny układ A+.</span>
+                    </div>
+                  </div>
+                ) : (
+                  // ACTIONABLE TRADE STATE (LONG or SHORT)
+                  <div className="p-4 bg-[#1a1e29] border border-[#2a2e39] rounded-2xl space-y-3.5 shadow-xl">
+                    {/* Header Verdict */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-sm ${
+                            activePlan.direction === 'LONG'
+                              ? 'bg-emerald-500 text-black shadow-emerald-900/30'
+                              : 'bg-rose-500 text-white shadow-rose-900/30'
+                          }`}
+                        >
+                          {activePlan.direction === 'LONG' ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                          {activePlan.direction} A+
+                        </span>
+
+                        {activePlan.kronos?.status === 'VERIFIED' && (
+                          <span
+                            title={`Kronos: ${activePlan.kronos.direction} (${activePlan.kronos.driftPct! > 0 ? '+' : ''}${activePlan.kronos.driftPct}%)`}
+                            className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1"
+                          >
+                            <Cpu size={11} className="text-cyan-400" />
+                            KRONOS A+
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-[10px] text-[#868993] uppercase font-bold block">Risk : Reward</span>
+                        <span className="font-mono font-black text-xs text-emerald-400">
+                          1 : {activePlan.setup.riskRewardRatio.toFixed(2)}
+                        </span>
                       </div>
                     </div>
-                  )}
 
-                  {/* Institutional & Order Flow Confluence Box */}
-                  {capturedSnapshot &&
-                    (capturedSnapshot.cvd ||
-                      (capturedSnapshot.nakedPocs && capturedSnapshot.nakedPocs.length > 0) ||
-                      capturedSnapshot.htfLevels ||
-                      capturedSnapshot.liquidationMagnet) && (
-                      <div className="p-2.5 rounded-lg bg-[#131722] border border-[#2a2e39] space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between text-[10px] text-[#868993] font-semibold uppercase tracking-wider">
-                          <span className="flex items-center gap-1 text-[#00bcd4]">
-                            <Activity size={12} /> Filtry Instytucjonalne (Order Flow)
+                    {/* Summary */}
+                    <div>
+                      <h4 className="font-bold text-white text-xs mb-1">{activePlan.title}</h4>
+                      <p className="text-[11px] text-[#868993] leading-relaxed">{activePlan.summary}</p>
+                    </div>
+
+                    {/* 3 BIG TRADE LEVEL TILES */}
+                    <div className="grid grid-cols-3 gap-2 font-mono">
+                      <div className="p-2.5 rounded-xl bg-[#131722] border border-[#2a2e39]">
+                        <span className="text-[9px] text-[#868993] uppercase block font-sans font-bold">WEJŚCIE</span>
+                        <span className="font-black text-white text-xs block truncate mt-0.5">
+                          ${activePlan.setup.entryPrice.toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-[#131722] border border-rose-500/30">
+                        <span className="text-[9px] text-rose-400 uppercase block font-sans font-bold">STOP LOSS</span>
+                        <span className="font-black text-rose-400 text-xs block truncate mt-0.5">
+                          ${activePlan.setup.stopLoss.toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 rounded-xl bg-[#131722] border border-emerald-500/30">
+                        <span className="text-[9px] text-emerald-400 uppercase block font-sans font-bold">CEL (TP1)</span>
+                        <span className="font-black text-emerald-400 text-xs block truncate mt-0.5">
+                          ${activePlan.setup.takeProfit1.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Primary Action Button */}
+                    <button
+                      onClick={handleApplyToChart}
+                      className="w-full py-2.5 px-3 rounded-xl bg-[#2962ff] hover:bg-[#1e53e5] text-white font-black text-xs flex items-center justify-center gap-2 transition-all shadow-md active:scale-[0.99]"
+                    >
+                      <Target size={15} />
+                      <span>🎯 Nanieś Setup na Wykres (1-Click)</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* 2. ACCORDION: Zaawansowane Szczegóły Analityczne (Collapsible) */}
+                <div className="border border-[#2a2e39] rounded-xl overflow-hidden bg-[#161a25]">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced(!showAdvanced)}
+                    className="w-full py-2.5 px-3.5 flex items-center justify-between text-xs font-semibold text-[#868993] hover:text-white transition-colors bg-[#1a1e29]"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Activity size={13} className="text-[#2962ff]" />
+                      <span>Szczegóły Analityczne (CVD, nPOC, Zrzuty)</span>
+                    </span>
+                    {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+
+                  {showAdvanced && (
+                    <div className="p-3 space-y-3 border-t border-[#2a2e39] text-xs animate-in fade-in">
+                      {/* Order Flow Details */}
+                      {capturedSnapshot && (
+                        <div className="space-y-2">
+                          <span className="text-[10px] text-[#868993] font-bold uppercase tracking-wider block">
+                            Filtry Order Flow & Smart Money
                           </span>
-                          <span className="text-gray-400">Smart Money</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
-                          {capturedSnapshot.cvd && (
-                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80">
-                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">CVD Divergence</div>
-                              <div
-                                className={`font-bold ${
-                                  capturedSnapshot.cvd.divergence === 'BULLISH'
-                                    ? 'text-emerald-400'
-                                    : capturedSnapshot.cvd.divergence === 'BEARISH'
-                                    ? 'text-rose-400'
-                                    : 'text-gray-300'
-                                }`}
-                              >
-                                {capturedSnapshot.cvd.divergence
-                                  ? `${capturedSnapshot.cvd.divergence} DIV`
-                                  : 'Brak dywergencji'}
-                              </div>
-                            </div>
-                          )}
-                          {capturedSnapshot.liquidationMagnet && (
-                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80">
-                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">Magnes Likwidacji</div>
-                              <div className="font-bold text-[#f7a600]">
-                                ${capturedSnapshot.liquidationMagnet.price.toLocaleString()} ({capturedSnapshot.liquidationMagnet.leverage})
-                              </div>
-                            </div>
-                          )}
-                          {capturedSnapshot.nakedPocs && capturedSnapshot.nakedPocs.length > 0 && (
-                            <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80 col-span-2">
-                              <div className="text-[#868993] font-sans text-[9px] mb-0.5">Naked POCs (Dziewicze Wolumeny)</div>
-                              <div className="text-[#d1d4dc] truncate">
-                                {capturedSnapshot.nakedPocs
-                                  .map(
-                                    (p) =>
-                                      `$${p.price.toLocaleString()} (${
-                                        p.distancePct > 0 ? '+' : ''
-                                      }${p.distancePct}%)`
-                                  )
-                                  .join(' • ')}
-                              </div>
-                            </div>
-                          )}
-                          {capturedSnapshot.htfLevels &&
-                            (capturedSnapshot.htfLevels.pdh ||
-                              capturedSnapshot.htfLevels.pdl ||
-                              capturedSnapshot.htfLevels.mondayHigh) && (
-                              <div className="p-1.5 rounded bg-[#1e222d] border border-[#2a2e39]/80 col-span-2">
-                                <div className="text-[#868993] font-sans text-[9px] mb-0.5">Poziomy Sesyjne (PDH / PDL / Mon)</div>
-                                <div className="text-[#868993] flex items-center gap-2">
-                                  {capturedSnapshot.htfLevels.pdh && (
-                                    <span>
-                                      PDH: <strong className="text-rose-400">${capturedSnapshot.htfLevels.pdh.toLocaleString()}</strong>
-                                    </span>
-                                  )}
-                                  {capturedSnapshot.htfLevels.pdl && (
-                                    <span>
-                                      PDL: <strong className="text-emerald-400">${capturedSnapshot.htfLevels.pdl.toLocaleString()}</strong>
-                                    </span>
-                                  )}
-                                  {capturedSnapshot.htfLevels.mondayHigh && (
-                                    <span>
-                                      MonH: <strong className="text-white">${capturedSnapshot.htfLevels.mondayHigh.toLocaleString()}</strong>
-                                    </span>
-                                  )}
+                          <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                            {capturedSnapshot.cvd && (
+                              <div className="p-2 rounded-lg bg-[#1e222d] border border-[#2a2e39]">
+                                <div className="text-[#868993] font-sans text-[9px] mb-0.5">Dywergencja CVD</div>
+                                <div
+                                  className={`font-bold ${
+                                    capturedSnapshot.cvd.divergence === 'BULLISH'
+                                      ? 'text-emerald-400'
+                                      : capturedSnapshot.cvd.divergence === 'BEARISH'
+                                      ? 'text-rose-400'
+                                      : 'text-gray-300'
+                                  }`}
+                                >
+                                  {capturedSnapshot.cvd.divergence || 'Brak'}
                                 </div>
                               </div>
                             )}
+
+                            {activePlan.cipherBAnalysis && (
+                              <div className="p-2 rounded-lg bg-[#1e222d] border border-[#2a2e39]">
+                                <div className="text-[#868993] font-sans text-[9px] mb-0.5">Cipher B MFI</div>
+                                <div className="font-bold text-white">
+                                  {activePlan.cipherBAnalysis.mfiTrend}
+                                </div>
+                              </div>
+                            )}
+
+                            {capturedSnapshot.nakedPocs && capturedSnapshot.nakedPocs.length > 0 && (
+                              <div className="p-2 rounded-lg bg-[#1e222d] border border-[#2a2e39] col-span-2">
+                                <div className="text-[#868993] font-sans text-[9px] mb-0.5">Naked POCs (Magnesy Wolumenu)</div>
+                                <div className="text-[#d1d4dc] truncate">
+                                  {capturedSnapshot.nakedPocs
+                                    .slice(0, 3)
+                                    .map((p) => `$${p.price.toLocaleString()} (${p.distancePct}%)`)
+                                    .join(' • ')}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                  {/* Trade Levels Grid */}
-                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-[#2a2e39]/60 text-xs font-mono">
-                    <div className="p-2 rounded bg-[#131722] border border-[#2a2e39]">
-                      <span className="text-[10px] text-[#868993] block font-sans">ENTRY</span>
-                      <span className="font-bold text-white text-[11px]">
-                        ${activePlan.setup.entryPrice.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="p-2 rounded bg-[#131722] border border-[#2a2e39]">
-                      <span className="text-[10px] text-rose-400 block font-sans">STOP LOSS</span>
-                      <span className="font-bold text-rose-400 text-[11px]">
-                        ${activePlan.setup.stopLoss.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="p-2 rounded bg-[#131722] border border-[#2a2e39]">
-                      <span className="text-[10px] text-emerald-400 block font-sans">TARGET (TP1)</span>
-                      <span className="font-bold text-emerald-400 text-[11px]">
-                        ${activePlan.setup.takeProfit1.toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
+                      {/* Multi-Timeframe Context */}
+                      {activePlan.htfContext && (
+                        <div className="space-y-2 pt-1 border-t border-[#2a2e39]">
+                          <span className="text-[10px] text-[#868993] font-bold uppercase tracking-wider block">
+                            Kontekst Multi-Timeframe
+                          </span>
+                          <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                            <div className="p-2 rounded-lg bg-[#1e222d] border border-[#2a2e39]">
+                              <span className="text-[#868993] font-sans text-[9px] block">
+                                Makro ({activePlan.htfContext.macro.timeframe})
+                              </span>
+                              <span className="font-bold text-white block mt-0.5">
+                                {activePlan.htfContext.macro.trend}
+                              </span>
+                            </div>
+                            <div className="p-2 rounded-lg bg-[#1e222d] border border-[#2a2e39]">
+                              <span className="text-[#868993] font-sans text-[9px] block">
+                                Struktura ({activePlan.htfContext.structure.timeframe})
+                              </span>
+                              <span className="font-bold text-white block mt-0.5">
+                                {activePlan.htfContext.structure.trend}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
-                  {/* Technical Confluence Badges */}
-                  <div className="space-y-1.5 pt-1 text-[11px]">
-                    <div className="flex items-start gap-1.5 text-[#868993]">
-                      <Target size={13} className="text-[#2962ff] shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="text-[#d1d4dc]">Strefa Wejścia:</strong>{' '}
-                        ${activePlan.setup.entryZone[0].toLocaleString()} - $
-                        {activePlan.setup.entryZone[1].toLocaleString()}
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-1.5 text-[#868993]">
-                      <Zap size={13} className="text-[#f7a600] shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="text-[#d1d4dc]">Cipher B Trigger:</strong>{' '}
-                        {activePlan.cipherBAnalysis.expectedTrigger}
-                      </div>
-                    </div>
-                  </div>
+                      {/* Chart Screenshot Preview */}
+                      {(capturedSnapshot?.imageBase64 || capturedSnapshot?.htfImageBase64) && (
+                        <div className="space-y-2 pt-1 border-t border-[#2a2e39]">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-[#868993] font-bold uppercase tracking-wider">
+                              Zrzut przesłany do AI
+                            </span>
+                            {capturedSnapshot?.htfImageBase64 && (
+                              <div className="flex items-center gap-1 bg-[#131722] p-0.5 rounded border border-[#2a2e39] text-[9px]">
+                                <button
+                                  type="button"
+                                  onClick={() => setSnapshotViewTab('exec')}
+                                  className={`px-1.5 py-0.5 rounded font-semibold ${
+                                    snapshotViewTab === 'exec' ? 'bg-[#2962ff] text-white' : 'text-[#868993]'
+                                  }`}
+                                >
+                                  {capturedSnapshot.interval}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSnapshotViewTab('htf')}
+                                  className={`px-1.5 py-0.5 rounded font-semibold ${
+                                    snapshotViewTab === 'htf' ? 'bg-[#7c4dff] text-white' : 'text-[#868993]'
+                                  }`}
+                                >
+                                  {capturedSnapshot.htfContext?.macro.timeframe || '4h'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
 
-                  {/* Actions for this setup */}
-                  <div className="pt-2 flex items-center gap-2">
-                    <button
-                      onClick={handleApplyToChart}
-                      className="flex-1 py-2 px-3 rounded-lg bg-[#2962ff] hover:bg-[#1e53e5] text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-                    >
-                      <Target size={14} />
-                      <span>🎯 Nanieś na Wykres</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSentinelEnabled(true);
-                        StorageService.setAutoSentinel(true);
-                        setActiveTab('sentinel');
-                      }}
-                      className="py-2 px-3 rounded-lg bg-[#1e222d] hover:bg-[#2a2e39] border border-[#363c4e] text-emerald-400 font-semibold text-xs flex items-center gap-1.5 transition-colors"
-                      title="Włącz monitorowanie przez Jeva"
-                    >
-                      <ShieldAlert size={14} />
-                      <span>Monitoruj Jev</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Screenshot Preview with Multi-Timeframe Tabs */}
-                {(capturedSnapshot?.imageBase64 || capturedSnapshot?.htfImageBase64) && (
-                  <div className="p-3 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-[#868993] block">
-                        Zrzuty przesłane do AI:
-                      </span>
-                      {capturedSnapshot?.htfImageBase64 && (
-                        <div className="flex items-center gap-1 bg-[#161a25] p-0.5 rounded-lg border border-[#2a2e39] text-[10px]">
-                          <button
-                            type="button"
-                            onClick={() => setSnapshotViewTab('exec')}
-                            className={`px-2 py-0.5 rounded font-semibold transition-colors ${
-                              snapshotViewTab === 'exec'
-                                ? 'bg-[#2962ff] text-white'
-                                : 'text-[#868993] hover:text-white'
-                            }`}
-                          >
-                            Wykonawczy ({capturedSnapshot.interval} w tle)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSnapshotViewTab('htf')}
-                            className={`px-2 py-0.5 rounded font-semibold transition-colors ${
-                              snapshotViewTab === 'htf'
-                                ? 'bg-[#7c4dff] text-white'
-                                : 'text-[#868993] hover:text-white'
-                            }`}
-                          >
-                            Makro ({capturedSnapshot.htfContext?.macro.timeframe || '4h'} w tle)
-                          </button>
+                          <div className="rounded-lg overflow-hidden border border-[#2a2e39] aspect-video bg-[#0c0d10]">
+                            <img
+                              src={
+                                snapshotViewTab === 'htf' && capturedSnapshot?.htfImageBase64
+                                  ? capturedSnapshot.htfImageBase64
+                                  : capturedSnapshot?.imageBase64 || ''
+                              }
+                              alt="Chart snapshot"
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
-
-                    <div className="rounded-lg overflow-hidden border border-[#2a2e39] aspect-video bg-[#0c0d10] relative">
-                      <img
-                        src={
-                          snapshotViewTab === 'htf' && capturedSnapshot?.htfImageBase64
-                            ? capturedSnapshot.htfImageBase64
-                            : capturedSnapshot?.imageBase64 || ''
-                        }
-                        alt="Chart snapshot"
-                        className="w-full h-full object-contain"
-                      />
-                      <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/75 text-white font-mono border border-white/10">
-                        {snapshotViewTab === 'htf'
-                          ? `🌐 Wykres Makro (${capturedSnapshot?.htfContext?.macro.timeframe || '4h'}) w tle`
-                          : `⚡ Wykres Wykonawczy (${capturedSnapshot?.interval || '15m'}) w tle`}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* ----------------- TAB 2: MULTI-COIN RADAR & 1:1 GUARD ----------------- */}
+        {/* ===================== TAB 2: 📡 RADAR RYNKU ===================== */}
         {activeTab === 'sentinel' && (
           <div className="space-y-4">
-            {/* Control & Batch Scan Header */}
-            <div className="p-3.5 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-3">
+            {/* Top Control Bar */}
+            <div className="p-3.5 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-2.5">
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
-                    <Shield className="text-[#089981]" size={14} />
-                    <span>Radar Setupów & Strażnik 1:1</span>
+                    <Target className="text-[#089981]" size={14} />
+                    <span>Radar Rynku (Top 5 Watchlist)</span>
                   </h4>
                   <span className="text-[11px] text-[#868993] block">
-                    Ciągły nadzór na żywo (0 tokenów) + automatyczne rysunki
+                    Skanuje BTC, ETH, SOL, NEAR, SUI i filtruje przez twarde VETO
                   </span>
                 </div>
-                <button
-                  onClick={() => aiTraderService.playTriggerChime()}
-                  className="py-1 px-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-xs text-[#868993] hover:text-white transition-colors"
-                  title="Test sygnału dźwiękowego gongu"
-                >
-                  <Volume2 size={13} />
-                </button>
               </div>
 
-              {/* Action Buttons: Batch Scan & Clear Invalid */}
-              <div className="flex items-center gap-2 pt-1">
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-0.5">
                 <button
                   onClick={handleBatchScanWatchlist}
                   disabled={isBatchScanning}
-                  className="flex-1 py-1.5 px-3 rounded-lg bg-[#2962ff] hover:bg-[#1e4bd8] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 shadow-md"
+                  className="flex-1 py-2 px-3 rounded-lg bg-[#2962ff] hover:bg-[#1e4bd8] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 shadow-md"
                 >
-                  <RefreshCw size={12} className={isBatchScanning ? 'animate-spin' : ''} />
-                  <span>{isBatchScanning ? 'Skanowanie...' : 'Skanuj Watchlistę'}</span>
+                  <RefreshCw size={13} className={isBatchScanning ? 'animate-spin' : ''} />
+                  <span>{isBatchScanning ? 'Skanowanie...' : '⚡ Skanuj Watchlistę'}</span>
                 </button>
 
                 <button
                   onClick={() => setupGuardService.clearInvalidatedPlans()}
                   disabled={invalidPlansCount === 0}
-                  className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                  className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
                     invalidPlansCount > 0
                       ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25'
                       : 'bg-[#2a2e39] text-[#868993] opacity-50 cursor-not-allowed'
                   }`}
-                  title="Usuń setupy, które wybiły SL lub osiągnęły cel przed wejściem"
+                  title="Usuń setupy, które wybiły SL lub osiągnęły cel"
                 >
-                  <Trash2 size={12} />
-                  <span>Wyczyść nieaktualne {invalidPlansCount > 0 ? `(${invalidPlansCount})` : ''}</span>
+                  <Trash2 size={13} />
+                  <span>Wyczyść ({invalidPlansCount})</span>
                 </button>
               </div>
 
@@ -901,37 +781,24 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
               {isBatchScanning && batchProgress && (
                 <div className="p-3 bg-[#141720] border border-[#2962ff]/40 rounded-xl space-y-2 animate-in fade-in shadow-md">
                   <div className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <RefreshCw size={12} className="animate-spin text-[#2962ff] shrink-0" />
-                      <span className="font-bold text-white text-[11px] truncate">
-                        Skanowanie ({batchProgress.current}/{batchProgress.total}): {batchProgress.symbol}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[#868993] font-mono text-[10px]">
-                        {Math.round((batchProgress.current / batchProgress.total) * 100)}%
-                      </span>
-                      <button
-                        onClick={() => setupGuardService.cancelWatchlistScan()}
-                        className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px] font-bold border border-rose-500/40 transition-colors"
-                        title="Zatrzymaj skanowanie"
-                      >
-                        Anuluj
-                      </button>
-                    </div>
+                    <span className="font-bold text-white text-[11px] truncate">
+                      Skanowanie ({batchProgress.current}/{batchProgress.total}): {batchProgress.symbol}
+                    </span>
+                    <button
+                      onClick={() => setupGuardService.cancelWatchlistScan()}
+                      className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px] font-bold border border-rose-500/40"
+                    >
+                      Anuluj
+                    </button>
                   </div>
-
-                  {/* Progress Bar */}
                   <div className="w-full bg-[#1e222d] h-1.5 rounded-full overflow-hidden">
                     <div
                       className="bg-gradient-to-r from-[#2962ff] to-[#00e676] h-full transition-all duration-300"
                       style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
                     />
                   </div>
-
-                  {/* Dynamic sub-step stage text */}
                   {batchProgress.stage && (
-                    <div className="text-[10px] text-[#868993] truncate font-medium flex items-center gap-1.5 pt-0.5">
+                    <div className="text-[10px] text-[#868993] truncate font-medium flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#2962ff] animate-ping shrink-0" />
                       <span className="truncate">{batchProgress.stage}</span>
                     </div>
@@ -945,41 +812,30 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
               <button
                 onClick={() => setRadarFilter('all')}
                 className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
-                  radarFilter === 'all'
-                    ? 'bg-[#2a2e39] text-white shadow-sm'
-                    : 'text-[#868993] hover:text-[#d1d4dc]'
+                  radarFilter === 'all' ? 'bg-[#2a2e39] text-white shadow-sm' : 'text-[#868993] hover:text-[#d1d4dc]'
                 }`}
               >
-                <span>Wszystkie</span>
-                <span className="px-1 py-0.2 rounded-full bg-white/10 text-[9px] font-mono font-normal">
-                  {plans.length}
-                </span>
+                <span>Wszystkie ({plans.length})</span>
               </button>
               <button
                 onClick={() => setRadarFilter('active')}
                 className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
                   radarFilter === 'active'
-                    ? 'bg-emerald-500/20 text-emerald-400 shadow-sm border border-emerald-500/30'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                     : 'text-[#868993] hover:text-[#d1d4dc]'
                 }`}
               >
-                <span>Aktywne</span>
-                <span className="px-1 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-mono font-bold">
-                  {activePlansCount}
-                </span>
+                <span>Aktywne ({activePlansCount})</span>
               </button>
               <button
                 onClick={() => setRadarFilter('invalidated')}
                 className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
                   radarFilter === 'invalidated'
-                    ? 'bg-rose-500/20 text-rose-400 shadow-sm border border-rose-500/30'
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                     : 'text-[#868993] hover:text-[#d1d4dc]'
                 }`}
               >
-                <span>Nieaktualne</span>
-                <span className="px-1 py-0.2 rounded-full bg-rose-500/20 text-rose-400 text-[9px] font-mono font-bold">
-                  {invalidPlansCount}
-                </span>
+                <span>Zakończone ({invalidPlansCount})</span>
               </button>
             </div>
 
@@ -998,10 +854,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                       <div className="w-10 h-10 rounded-full bg-[#2a2e39] flex items-center justify-center mx-auto text-[#868993]">
                         <Target size={18} />
                       </div>
-                      <h5 className="font-semibold text-white text-xs">Brak setupów w tym widoku</h5>
+                      <h5 className="font-semibold text-white text-xs">Brak setupów</h5>
                       <p className="text-[11px] text-[#868993] leading-relaxed max-w-[280px] mx-auto">
-                        Kliknij <strong>"Skanuj Watchlistę"</strong> powyżej lub wygeneruj plan w zakładce{' '}
-                        <strong>"Mózg Strategii"</strong>. Setupy automatycznie naniosą się na wykres i będą nadzorowane 1:1.
+                        Kliknij <strong>"Skanuj Watchlistę"</strong> powyżej, aby automatycznie znaleźć i nadzorować setupy dla 5 głównych kryptowalut.
                       </p>
                     </div>
                   );
@@ -1020,12 +875,10 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                         : 'bg-[#1e222d] border-[#2a2e39] hover:border-[#3a4052]'
                     }`}
                   >
-                    {/* Card Header: Symbol, Direction, Status Badge, Actions */}
+                    {/* Header */}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="font-black text-white text-sm tracking-wide font-mono">
-                          {plan.symbol}
-                        </span>
+                        <span className="font-black text-white text-sm font-mono">{plan.symbol}</span>
                         <span
                           className={`px-1.5 py-0.5 rounded text-[10px] font-black flex items-center gap-1 ${
                             plan.direction === 'LONG'
@@ -1040,178 +893,62 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                         </span>
 
                         {plan.kronos?.status === 'VERIFIED' && (
-                          <span
-                            title={`Kronos Konsensus A+: ${plan.kronos.direction} (${plan.kronos.driftPct! > 0 ? '+' : ''}${plan.kronos.driftPct}% drift, pewność: ${plan.kronos.confidence}%)`}
-                            className="px-1.5 py-0.5 rounded text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1 shadow-sm shadow-cyan-500/20"
-                          >
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
                             <Cpu size={10} className="text-cyan-400" />
-                            KRONOS A+ {plan.kronos.driftPct! > 0 ? '+' : ''}{plan.kronos.driftPct}%
-                          </span>
-                        )}
-
-                        {plan.kronos?.status === 'VETOED' && (
-                          <span
-                            title={`Kronos VETO: Model statystyczny zablokował setup z powodu rozbieżności (${plan.kronos.direction} ${plan.kronos.driftPct}%)`}
-                            className="px-1.5 py-0.5 rounded text-[10px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center gap-1"
-                          >
-                            <ShieldAlert size={10} className="text-rose-400" />
-                            KRONOS VETO
+                            A+
                           </span>
                         )}
                       </div>
 
-                      {/* Status Badge & Actions */}
                       <div className="flex items-center gap-1.5">
-                        {plan.status === 'IN_ZONE' ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-black animate-pulse flex items-center gap-1">
-                            <Zap size={10} /> W STREFIE 🔥
-                          </span>
-                        ) : plan.status === 'TRIGGERED' ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-500 text-white flex items-center gap-1">
-                            <CheckCircle2 size={10} /> TRIGGER 🚀
-                          </span>
-                        ) : plan.status === 'INVALIDATED' ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center gap-1">
-                            <AlertTriangle size={10} /> NIEAKTUALNY ❌
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30 flex items-center gap-1">
-                            <Clock size={10} /> CZEKA
-                          </span>
-                        )}
-
                         <button
                           onClick={() => handleViewPlanOnChart(plan)}
-                          className="p-1 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-[#868993] hover:text-white transition-colors"
-                          title="Pokaż i nanieś na wykres"
+                          className="py-1 px-2.5 rounded bg-[#2962ff] hover:bg-[#1e53e5] text-white text-xs font-bold flex items-center gap-1 transition-colors shadow-sm"
+                          title="Pokaż na wykresie"
                         >
-                          <Target size={13} />
+                          <Target size={12} />
+                          <span>Pokaż</span>
                         </button>
                         <button
                           onClick={() => setupGuardService.deletePlan(plan.id)}
                           className="p-1 rounded bg-[#2a2e39] hover:bg-rose-500/20 text-[#868993] hover:text-rose-400 transition-colors"
-                          title="Usuń setup z radaru"
+                          title="Usuń z radaru"
                         >
                           <Trash2 size={13} />
                         </button>
                       </div>
                     </div>
 
-                    {/* Status / Distance Notification Bar */}
-                    {plan.status === 'INVALIDATED' ? (
-                      <div className="p-2 rounded bg-rose-500/10 border border-rose-500/25 text-rose-300 text-[11px] flex items-start gap-1.5">
-                        <AlertTriangle size={13} className="shrink-0 mt-0.5 text-rose-400" />
-                        <div>
-                          <span className="font-bold block text-[10px] uppercase text-rose-400">
-                            Powód unieważnienia:
-                          </span>
-                          <span>{plan.invalidationReason || 'Zanegowany przez reguły obrony strategii'}</span>
-                        </div>
-                      </div>
-                    ) : plan.status === 'IN_ZONE' ? (
-                      <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] flex items-center gap-1.5 font-semibold">
-                        <Zap size={14} className="text-emerald-400 shrink-0" />
-                        <span>Cena jest w strefie wejścia! Obserwuj potwierdzenie Cipher B.</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-between text-xs px-1">
-                        <span className="text-[#868993] flex items-center gap-1.5 text-[11px]">
-                          <Activity size={12} className="text-[#2962ff]" />
-                          Dystans do strefy wejścia:
-                        </span>
-                        <span className="font-mono font-bold text-white text-[11px]">
-                          {plan.distanceToEntryPct !== undefined && plan.distanceToEntryPct > 0
-                            ? `${plan.distanceToEntryPct}%`
-                            : 'W pobliżu'}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* 1:1 Guard Strategy Parameters */}
-                    <div className="grid grid-cols-2 gap-2 text-[11px] p-2.5 bg-[#141720] border border-[#262a35] rounded-lg font-mono">
+                    {/* Numbers Grid */}
+                    <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono p-2 bg-[#141720] rounded-lg">
                       <div>
-                        <span className="text-[10px] text-[#868993] block font-sans">Strefa Wejścia</span>
-                        <span className="font-semibold text-white">
-                          ${plan.setup.entryZone[0].toLocaleString()} - ${plan.setup.entryZone[1].toLocaleString()}
-                        </span>
+                        <span className="text-[#868993] block font-sans text-[9px]">Wejście</span>
+                        <span className="font-bold text-white">${plan.setup.entryPrice.toLocaleString()}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] text-[#868993] block font-sans">Stop Loss / Inwalidacja</span>
-                        <span className="font-semibold text-rose-400">
-                          ${(plan.guardRules?.invalidationPrice ?? plan.setup.stopLoss).toLocaleString()}
-                        </span>
+                        <span className="text-rose-400 block font-sans text-[9px]">Stop Loss</span>
+                        <span className="font-bold text-rose-400">${plan.setup.stopLoss.toLocaleString()}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] text-[#868993] block font-sans">Cel TP1 (Front-run)</span>
-                        <span className="font-semibold text-emerald-400">
-                          ${(plan.guardRules?.targetPrice ?? plan.setup.takeProfit1).toLocaleString()}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-[#868993] block font-sans">Wymóg Wskaźników</span>
-                        <span className="font-semibold text-blue-400 truncate block">
-                          {plan.guardRules?.requiredCipherSignal || plan.jevCriteria?.requiredCipherSignal || 'Brak'}
-                        </span>
+                        <span className="text-emerald-400 block font-sans text-[9px]">Cel (TP1)</span>
+                        <span className="font-bold text-emerald-400">${plan.setup.takeProfit1.toLocaleString()}</span>
                       </div>
                     </div>
-
-                    {/* Strategy Summary */}
-                    {plan.summary && (
-                      <p className="text-[11px] text-[#868993] italic line-clamp-2 px-1">
-                        "{plan.summary}"
-                      </p>
-                    )}
                   </div>
                 ));
               })()}
             </div>
-
-            {/* Optional Jev LLM Strażnik (Collapsible / Advanced) */}
-            <div className="pt-2 border-t border-[#2a2e39] space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="font-bold text-white text-xs">Jev Strażnik LLM (Opcjonalny)</h5>
-                  <span className="text-[11px] text-[#868993]">
-                    Głęboka weryfikacja świecy 1m przez model: <strong className="text-white font-mono">{jevModel}</strong>
-                  </span>
-                </div>
-                <button
-                  onClick={() => {
-                    const next = !sentinelEnabled;
-                    setSentinelEnabled(next);
-                    StorageService.setAutoSentinel(next);
-                  }}
-                  className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all ${
-                    sentinelEnabled
-                      ? 'bg-emerald-500 text-black shadow-md'
-                      : 'bg-[#2a2e39] text-[#868993] hover:text-white'
-                  }`}
-                >
-                  <ShieldAlert size={13} />
-                  <span>{sentinelEnabled ? 'Aktywny' : 'Wyłączony'}</span>
-                </button>
-              </div>
-
-              {sentinelEnabled && (
-                <div className="flex items-center justify-between text-xs text-[#868993]">
-                  <span className="flex items-center gap-1">
-                    <Clock size={12} className="text-emerald-400" /> Następny skan LLM:
-                  </span>
-                  <span className="font-mono font-bold text-emerald-400">{scanCountdown}s</span>
-                </div>
-              )}
-            </div>
           </div>
         )}
 
-        {/* ----------------- TAB 3: SETTINGS ----------------- */}
+        {/* ===================== TAB 3: ⚙️ USTAWIENIA ===================== */}
         {activeTab === 'settings' && (
           <div className="space-y-4">
-            {/* API Key Input & Provider Indicator */}
+            {/* API Key */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-white block">
-                  Klucz API ({activeProvider === 'opencode' ? 'OpenCode Go / Console' : 'OpenRouter'})
+                  Klucz API ({activeProvider === 'opencode' ? 'OpenCode Go' : 'OpenRouter'})
                 </label>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1 border ${
@@ -1246,7 +983,6 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                 </button>
               </div>
 
-              {/* Test Button & Status */}
               <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
@@ -1255,11 +991,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   className="py-1 px-2.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-[11px] font-semibold text-white flex items-center gap-1.5 transition-colors disabled:opacity-50"
                 >
                   <RefreshCw size={12} className={isTestingKey ? 'animate-spin' : ''} />
-                  <span>{isTestingKey ? 'Sprawdzanie...' : '🔍 Przetestuj Klucz API'}</span>
+                  <span>{isTestingKey ? 'Sprawdzanie...' : '🔍 Sprawdź Klucz'}</span>
                 </button>
-                <span className="text-[10px] text-[#868993]">
-                  Wykrywa OpenCode (`oc_sk_`) oraz OpenRouter (`sk-or-`).
-                </span>
+                <span className="text-[10px] text-[#868993]">Wykrywa klucz automatycznie.</span>
               </div>
 
               {testResult && (
@@ -1273,22 +1007,13 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   {testResult.message}
                 </div>
               )}
-
-              <p className="text-[10px] text-[#868993] leading-relaxed">
-                Klucz przechowywany jest wyłącznie lokalnie w Twojej przeglądarce (<code className="text-[#2962ff]">localStorage</code>).
-              </p>
             </div>
 
-            {/* Brain Model Selector */}
+            {/* Model Selector */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-white block">
-                  🧠 Model Mózgu (Strategia + Vision)
-                </label>
-                <span className="text-[10px] text-[#868993]">
-                  {activeProvider === 'opencode' ? 'Katalog OpenCode Go' : 'Katalog OpenRouter'}
-                </span>
-              </div>
+              <label className="text-xs font-semibold text-white block">
+                🧠 Model AI (Strategia & Analiza Świec)
+              </label>
               <select
                 value={brainModel}
                 onChange={(e) => setBrainModel(e.target.value)}
@@ -1306,43 +1031,26 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   type="text"
                   value={customBrainModel}
                   onChange={(e) => setCustomBrainModel(e.target.value)}
-                  placeholder="Wpisz identyfikator (np. deepseek-v4.1-flash)..."
+                  placeholder="Wpisz identyfikator modelu..."
                   className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono mt-1"
                 />
               )}
             </div>
 
-            {/* Jev Model Selector */}
-            <div className="space-y-2">
+            {/* Kronos Info Card */}
+            <div className="p-3 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-white block">
-                  🛡️ Model Jev (Egzekutor / Strażnik 1m)
-                </label>
-                <span className="text-[10px] text-[#868993]">
-                  Błyskawiczna analiza co 60s
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Cpu size={14} className="text-cyan-400" />
+                  <span>Model Statystyczny Kronos</span>
+                </span>
+                <span className="text-[10px] font-bold text-cyan-300 bg-cyan-500/15 px-2 py-0.5 rounded-full border border-cyan-500/30">
+                  {kronosOnline ? 'Aktywny (Docker)' : 'Wyłączony'}
                 </span>
               </div>
-              <select
-                value={jevModel}
-                onChange={(e) => setJevModel(e.target.value)}
-                className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none"
-              >
-                {jevPresets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-
-              {jevModel === 'custom' && (
-                <input
-                  type="text"
-                  value={customJevModel}
-                  onChange={(e) => setCustomJevModel(e.target.value)}
-                  placeholder="Wpisz identyfikator Jeva..."
-                  className="w-full bg-[#1e222d] border border-[#2a2e39] focus:border-[#2962ff] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono mt-1"
-                />
-              )}
+              <p className="text-[11px] text-[#868993] leading-relaxed">
+                Kronos to 102M model wyszkolony na 12 mld świec. Odpowiada za 5 ścieżek Monte Carlo i twarde VETO przy braku pędu. Działa lokalnie na Twoim komputerze bez żadnych opłat za tokeny.
+              </p>
             </div>
 
             {/* Save Button */}
@@ -1350,7 +1058,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
               onClick={handleSaveSettings}
               className="w-full py-2.5 rounded-lg bg-[#2962ff] hover:bg-[#1e53e5] font-bold text-xs text-white transition-colors mt-2"
             >
-              Zapisz Konfigurację
+              Zapisz Ustawienia
             </button>
           </div>
         )}
