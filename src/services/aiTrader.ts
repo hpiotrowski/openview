@@ -723,16 +723,16 @@ TOP-DOWN MULTI-TIMEFRAME & INSTITUTIONAL RULES:
 3. Order Flow & CVD Divergences: Look for passive limit order absorption (e.g., Bullish CVD divergence where price forms lower lows or equal lows while CVD trends upwards, indicating aggressive spot/taker selling is being absorbed by smart money limit buys).
 4. Unmitigated Targets (Naked POCs & Liquidation Clusters): Use Virgin / Naked POCs and Liquidation Heatmap clusters (50x/100x leverage pools) as high-probability magnet targets for TP1 / TP2.
 5. Session Liquidity (PDH / PDL / Monday Range): Note if price has swept Previous Day High (PDH) or Previous Day Low (PDL) to hunt retail stops before reversing.
-6. STRICT EXECUTION PROXIMITY & LOGICAL SANITY (MANDATORY):
+6. ENTRY ZONES & RETRACEMENT LOGIC (SMART MONEY LIMIT ENTRIES):
    - Current Live Price is $${snapshot.currentPrice}.
-   - Execution Proximity: entryPrice MUST be near the current live price (within 0.1% to 1.5% of $${snapshot.currentPrice}). NEVER propose a distant entry that is 3%-10% away while ignoring the current live price! If the nearest valid level is far away (>2%), you MUST choose "NEUTRAL".
-   - Direction & Targets Logic:
-     * For a SHORT: entryPrice can only be at or slightly above current price ($${snapshot.currentPrice} <= entryPrice <= $${Math.round(snapshot.currentPrice * 1.015 * 100) / 100}). StopLoss MUST be strictly > entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly < entryPrice AND STRICTLY < currentPrice ($${snapshot.currentPrice})! A short's take profit CAN NEVER be higher than the current market price!
-     * For a LONG: entryPrice can only be at or slightly below current price ($${Math.round(snapshot.currentPrice * 0.985 * 100) / 100} <= entryPrice <= $${snapshot.currentPrice}). StopLoss MUST be strictly < entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly > entryPrice AND STRICTLY > currentPrice ($${snapshot.currentPrice})! A long's take profit CAN NEVER be lower than the current market price!
+   - Real institutional SMC traders DO NOT chase green candles with market orders at the top of an impulsive expansion!
+   - You should plan high-probability entries at an unmitigated SMC level (Bullish/Bearish Order Block, Demand/Supply Zone, Fair Value Gap, or Session Retest):
+     * For a LONG: entryPrice can be AT current price (if price is already testing a demand zone) OR on a LIMIT PULLBACK below current price ($${Math.round(snapshot.currentPrice * 0.955 * 100) / 100} <= entryPrice <= $${snapshot.currentPrice}, i.e. 0.1% to 4.5% pullback). StopLoss MUST be strictly < entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly > entryPrice AND > currentPrice ($${snapshot.currentPrice})!
+     * For a SHORT: entryPrice can be AT current price (if price is already testing a supply zone) OR on a LIMIT PULLBACK above current price ($${snapshot.currentPrice} <= entryPrice <= $${Math.round(snapshot.currentPrice * 1.045 * 100) / 100}, i.e. 0.1% to 4.5% bounce). StopLoss MUST be strictly > entryPrice. TakeProfit1 and TakeProfit2 MUST be strictly < entryPrice AND < currentPrice ($${snapshot.currentPrice})!
    - Support/Demand awareness:
-     * DO NOT open or propose a SHORT if price is currently sitting right on a DEMAND zone or if Cipher B is deeply oversold (WT1 <= -40 with blue wave curling up) — that is selling the bottom into smart money accumulation.
-     * DO NOT open or propose a LONG if price is currently hitting a major SUPPLY zone or if Cipher B is deeply overbought (WT1 >= +40).
-   - If conditions for a high-probability trade near the current price are not met, RETURN direction: "NEUTRAL". A NEUTRAL plan is the mark of a seasoned professional trader.
+     * DO NOT propose a SHORT if price is currently sitting right on a major DEMAND zone or if Cipher B is deeply oversold (WT1 <= -40) — that is selling the bottom.
+     * DO NOT propose a LONG if price is currently hitting a major SUPPLY zone or if Cipher B is deeply overbought (WT1 >= +40).
+   - If the nearest valid level is too far (>5%), or if market is chopping without edge, RETURN direction: "NEUTRAL". A NEUTRAL plan is the mark of a seasoned professional trader.
 7. Cipher B criteria: define exact conditions (e.g. green dot below 0, bullish divergence, MFI cross).
 8. Jev criteria: provide clear numerical parameters so a high-frequency execution guardian can evaluate the setup every 60 seconds.
 
@@ -1016,8 +1016,8 @@ Return strictly the JSON trade plan.`,
 
     // Safety & Sanity Guard against hallucinated, distant, or illogical trade levels
     if (plan.direction === 'SHORT') {
-      const isTpAboveCurrent = plan.setup.takeProfit1 >= snapshot.currentPrice;
-      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.025;
+      const isTpAboveCurrent = plan.setup.takeProfit1 >= plan.setup.entryPrice;
+      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.05;
       if (isTpAboveCurrent || isEntryTooFar) {
         console.warn('AI generated an invalid or distant SHORT setup, falling back to NEUTRAL:', {
           entry: plan.setup.entryPrice,
@@ -1029,8 +1029,8 @@ Return strictly the JSON trade plan.`,
         plan.summary = `Bieżąca cena ($${snapshot.currentPrice}) znajduje się w strefie wsparcia/popytu lub zbyt daleko od oporu ($${plan.setup.entryPrice}). Cel TP ($${plan.setup.takeProfit1}) byłby nielogiczny dla pozycji krótkiej przy cenie rynkowej. AI zaleca cierpliwość.`;
       }
     } else if (plan.direction === 'LONG') {
-      const isTpBelowCurrent = plan.setup.takeProfit1 <= snapshot.currentPrice;
-      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.025;
+      const isTpBelowCurrent = plan.setup.takeProfit1 <= plan.setup.entryPrice;
+      const isEntryTooFar = Math.abs(plan.setup.entryPrice - snapshot.currentPrice) / snapshot.currentPrice > 0.05;
       if (isTpBelowCurrent || isEntryTooFar) {
         console.warn('AI generated an invalid or distant LONG setup, falling back to NEUTRAL:', {
           entry: plan.setup.entryPrice,
