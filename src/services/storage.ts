@@ -152,25 +152,28 @@ export const StorageService = {
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return [];
 
-      if (typeof currentPrice === 'number' && currentPrice > 0) {
-        // Filter out any overlays that were accidentally saved with wildly mismatched prices (e.g. BTC prices $83,000 on LINK $12)
-        const sanitized = parsed.filter((item: SavedOverlay) => {
-          if (item.symbol && item.symbol !== symbol) return false;
-          if (!item.points || item.points.length === 0) return true;
+      // Filter out any overlays that were accidentally saved with mismatched symbols or prices
+      const sanitized = parsed.filter((item: SavedOverlay) => {
+        // Discard if stamped with a different symbol
+        if (item.symbol && item.symbol !== symbol) return false;
+        if (!item.points || item.points.length === 0) return true;
+
+        if (typeof currentPrice === 'number' && currentPrice > 0) {
           const isOutlier = item.points.some((p) => {
             if (typeof p.value !== 'number' || isNaN(p.value)) return false;
-            return p.value > currentPrice * 6 || p.value < currentPrice * 0.15;
+            // Reject if drawing price is > 2.5x or < 0.4x of current live price
+            return p.value > currentPrice * 2.5 || p.value < currentPrice * 0.4;
           });
           return !isOutlier;
-        });
-
-        if (sanitized.length !== parsed.length) {
-          localStorage.setItem(key, JSON.stringify(sanitized));
         }
-        return sanitized;
-      }
 
-      return parsed;
+        return true;
+      });
+
+      if (sanitized.length !== parsed.length) {
+        localStorage.setItem(key, JSON.stringify(sanitized));
+      }
+      return sanitized;
     } catch {
       return [];
     }
