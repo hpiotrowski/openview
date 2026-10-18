@@ -33,6 +33,17 @@ import { chartRegistry } from '../services/chartRegistry';
 registerPositionOverlays();
 
 /**
+ * Returns default price precision for common crypto tickers (e.g. 8 for PEPE, 4 for DOGE/XRP, 3 for NEAR/SUI).
+ */
+export function getSymbolPrecision(symbol: string): number {
+  const s = symbol.toUpperCase();
+  if (s.includes('PEPE') || s.includes('SHIB') || s.includes('BONK') || s.includes('FLOKI') || s.includes('LUNC')) return 8;
+  if (s.includes('DOGE') || s.includes('XRP') || s.includes('ADA') || s.includes('TRX') || s.includes('GALA')) return 4;
+  if (s.includes('NEAR') || s.includes('SUI') || s.includes('MATIC') || s.includes('POL') || s.includes('DOT') || s.includes('LINK')) return 3;
+  return 2;
+}
+
+/**
  * Calculates optimal decimal precision for crypto prices (e.g. 8 decimals for PEPE, 4 for DOGE, 2 for BTC)
  * to prevent flat horizontal 0-value lines on the chart.
  */
@@ -562,11 +573,9 @@ export const Chart: React.FC<ChartProps> = ({
 
   // 4. Track current symbol in ref to prevent stale closures
   const symbolRef = useRef(symbol);
+  symbolRef.current = symbol;
   const isSwitchingSymbolRef = useRef(false);
   const loadingRef = useRef(true);
-  useEffect(() => {
-    symbolRef.current = symbol;
-  }, [symbol]);
 
   // Debounced auto-save of drawings to localStorage (strictly symbol-isolated & price-sanitized)
   const saveTimeoutRef = useRef<any>(null);
@@ -713,7 +722,7 @@ export const Chart: React.FC<ChartProps> = ({
       const chart = chartInstanceRef.current;
       if (chart) {
         chart.removeOverlay();
-        resetChartScale(chart);
+        chart.overrideYAxis({ paneId: 'candle_pane' });
       }
 
       lastPriceRef.current = 0;
@@ -776,19 +785,32 @@ export const Chart: React.FC<ChartProps> = ({
     // Immediately cancel previous WebSocket stream to prevent cross-symbol tick collisions
     BinanceService.unsubscribe(id);
 
+    // CRITICAL: Set symbol and period BEFORE setDataLoader so Klinecharts triggers getBars
+    const initialPrec = getSymbolPrecision(symbol);
+    chart.setSymbol({ ticker: symbol, pricePrecision: initialPrec, volumePrecision: 2 });
     chart.setPeriod(mapIntervalToPeriod(interval));
     const loadSymbol = symbol;
+
+    // Fallback safety timeout so spinner is never stuck under network lag
+    const safetyTimeout = setTimeout(() => {
+      setLoading(false);
+      loadingRef.current = false;
+      isSwitchingSymbolRef.current = false;
+    }, 7000);
 
     chart.setDataLoader({
       getBars: async ({ callback }) => {
         try {
           if (isReplayActive && replayEngine.isReplaying) {
+            clearTimeout(safetyTimeout);
             callback(replayEngine.getVisibleBars());
             setLoading(false);
             loadingRef.current = false;
             isSwitchingSymbolRef.current = false;
           } else {
             const bars = await BinanceService.fetchKlines(loadSymbol, interval, 1000);
+            clearTimeout(safetyTimeout);
+
             // If user quickly switched to another symbol while fetch was in flight, discard response
             if (loadSymbol !== symbolRef.current) return;
 
@@ -816,9 +838,11 @@ export const Chart: React.FC<ChartProps> = ({
                 onPriceUpdate(lastBar.close);
               }
 
-              // Dynamic precision based on real price (PEPE, DOGE, NEAR, BTC, etc.)
-              const prec = calculatePricePrecision(lastBar.close);
-              chart.setSymbol({ ticker: loadSymbol, pricePrecision: prec, volumePrecision: 2 });
+              // Update precision directly on store if needed without triggering chart data reload loop
+              const dynPrec = calculatePricePrecision(lastBar.close);
+              if ((chart as any)._chartStore?._symbol) {
+                (chart as any)._chartStore._symbol.pricePrecision = dynPrec;
+              }
 
               // Restore saved drawings strictly validated against actual bars range
               const minPrice = Math.min(...bars.map((b) => b.low));
@@ -852,6 +876,7 @@ export const Chart: React.FC<ChartProps> = ({
             isSwitchingSymbolRef.current = false;
           }
         } catch (err) {
+          clearTimeout(safetyTimeout);
           console.error('Error in getBars:', err);
           setLoading(false);
           loadingRef.current = false;
@@ -925,6 +950,7 @@ export const Chart: React.FC<ChartProps> = ({
     });
 
     return () => {
+      clearTimeout(safetyTimeout);
       BinanceService.unsubscribe(id);
     };
   }, [id, symbol, interval, isReplayActive]);
