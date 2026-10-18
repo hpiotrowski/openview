@@ -221,6 +221,19 @@ export const OPENROUTER_JEV_PRESETS = [
 export const BRAIN_MODEL_PRESETS = OPENCODE_BRAIN_PRESETS;
 export const JEV_MODEL_PRESETS = OPENCODE_JEV_PRESETS;
 
+export function combineSignals(s1?: AbortSignal, s2?: AbortSignal): AbortSignal | undefined {
+  if (!s1) return s2;
+  if (!s2) return s1;
+  if ('any' in AbortSignal && typeof (AbortSignal as any).any === 'function') {
+    return (AbortSignal as any).any([s1, s2]);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  s1.addEventListener('abort', onAbort, { once: true });
+  s2.addEventListener('abort', onAbort, { once: true });
+  return controller.signal;
+}
+
 export function getProviderConfig(apiKey: string): {
   provider: AIProvider;
   chatUrl: string;
@@ -407,10 +420,15 @@ class AITraderService {
   /**
    * Gathers full multi-dimensional snapshot for any symbol without needing an open chart pane
    */
-  async gatherSymbolSnapshot(symbol: string, interval = '15m', fetchHTF = true): Promise<MarketSnapshot | null> {
+  async gatherSymbolSnapshot(
+    symbol: string,
+    interval = '15m',
+    fetchHTF = true,
+    includeScreenshots = true
+  ): Promise<MarketSnapshot | null> {
     const bars = await BinanceService.fetchKlines(symbol, interval, 300);
     if (!bars || bars.length === 0) return null;
-    return this.buildSnapshotFromBars(symbol, interval, bars as any, fetchHTF);
+    return this.buildSnapshotFromBars(symbol, interval, bars as any, fetchHTF, null, includeScreenshots);
   }
 
   /**
@@ -421,7 +439,8 @@ class AITraderService {
     interval: string,
     bars: KLineData[],
     fetchHTF = true,
-    fallbackImageBase64?: string | null
+    fallbackImageBase64?: string | null,
+    includeScreenshots = true
   ): Promise<MarketSnapshot | null> {
     const currentBar = bars[bars.length - 1];
     const currentPrice = currentBar.close;
@@ -447,21 +466,23 @@ class AITraderService {
           };
         }
 
-        // Render off-screen HTF macro chart screenshot in the background
-        try {
-          htfImageBase64 = await chartRegistry.renderBackgroundChartSnapshot(
-            macroBars as any,
-            {
-              symbol,
-              interval: macro,
-              includeVol: true,
-              includeCipherB: false,
-              barSpace: 10,
-              offsetRight: 80,
-            }
-          );
-        } catch (renderErr) {
-          console.warn('Background HTF chart render failed:', renderErr);
+        // Render off-screen HTF macro chart screenshot in the background (only if screenshots enabled)
+        if (includeScreenshots) {
+          try {
+            htfImageBase64 = await chartRegistry.renderBackgroundChartSnapshot(
+              macroBars as any,
+              {
+                symbol,
+                interval: macro,
+                includeVol: true,
+                includeCipherB: false,
+                barSpace: 10,
+                offsetRight: 80,
+              }
+            );
+          } catch (renderErr) {
+            console.warn('Background HTF chart render failed:', renderErr);
+          }
         }
       } catch (err) {
         console.warn('Failed to fetch background HTF context from Binance:', err);
@@ -552,23 +573,25 @@ class AITraderService {
       };
     } catch (e) {}
 
-    // 6. Screenshot: Render crisp execution chart in background with Cipher B
+    // 6. Screenshot: Render crisp execution chart in background with Cipher B (if enabled)
     // (Never distorts, zooms or interrupts the user's active screen view!)
     let imageBase64: string | null = null;
-    try {
-      imageBase64 = await chartRegistry.renderBackgroundChartSnapshot(bars, {
-        symbol,
-        interval,
-        includeCipherB: true,
-        includeVol: true,
-        barSpace: 9,
-        offsetRight: 90,
-      });
-    } catch (e) {
-      console.warn('Background chart render failed, falling back to container snapshot:', e);
-    }
-    if (!imageBase64 || imageBase64.length < 4000) {
-      imageBase64 = fallbackImageBase64 || null;
+    if (includeScreenshots) {
+      try {
+        imageBase64 = await chartRegistry.renderBackgroundChartSnapshot(bars, {
+          symbol,
+          interval,
+          includeCipherB: true,
+          includeVol: true,
+          barSpace: 9,
+          offsetRight: 90,
+        });
+      } catch (e) {
+        console.warn('Background chart render failed, falling back to container snapshot:', e);
+      }
+      if (!imageBase64 || imageBase64.length < 4000) {
+        imageBase64 = fallbackImageBase64 || null;
+      }
     }
 
     // 7. Cumulative Volume Delta (CVD & Divergences)
@@ -665,6 +688,8 @@ class AITraderService {
     apiKey: string;
     model: string;
     snapshot: MarketSnapshot;
+    signal?: AbortSignal;
+    timeoutMs?: number;
   }): Promise<TradingPlan> {
     const { apiKey, model, snapshot } = params;
 
@@ -858,18 +883,40 @@ Return strictly the JSON trade plan.`,
 
     const config = getProviderConfig(cleanKey);
 
-    const response = await fetch(config.chatUrl, {
-      method: 'POST',
-      headers: config.headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessageContent },
-        ],
-        temperature: 0.2,
-      }),
-    });
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), params.timeoutMs || 40000);
+    const effectiveSignal = combineSignals(params.signal, timeoutController.signal);
+
+    let response: Response;
+    try {
+      response = await fetch(config.chatUrl, {
+        method: 'POST',
+        headers: config.headers,
+        signal: effectiveSignal,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessageContent },
+          ],
+          temperature: 0.2,
+        }),
+      });
+    } catch (fetchErr: any) {
+      if (fetchErr.name === 'AbortError') {
+        if (params.signal?.aborted) {
+          throw new Error('Skanowanie zostało anulowane przez użytkownika.');
+        }
+        throw new Error(
+          `Przekroczono limit czasu oczekiwania na model AI (${Math.round(
+            (params.timeoutMs || 40000) / 1000
+          )}s). Serwer AI nie odpowiedział na czas.`
+        );
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       const errText = await response.text();

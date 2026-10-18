@@ -273,54 +273,129 @@ class SetupGuardService {
       });
   }
 
+  private scanAbortController: AbortController | null = null;
+
+  /**
+   * Immediately stops any ongoing watchlist batch scan.
+   */
+  cancelWatchlistScan(): void {
+    if (this.scanAbortController) {
+      this.scanAbortController.abort();
+      this.scanAbortController = null;
+    }
+    this.isScanningWatchlist = false;
+    this.notify();
+  }
+
   /**
    * Scans all symbols in the user's watchlist sequentially, generating plans and auto-drawing them.
    */
   async scanWatchlist(
     symbols: string[],
-    params: { apiKey: string; model: string },
-    onProgress?: (current: number, total: number, symbol: string) => void
+    params: { apiKey: string; model: string; fastMode?: boolean },
+    onProgress?: (progress: { current: number; total: number; symbol: string; stage: string }) => void
   ): Promise<TradingPlan[]> {
     if (this.isScanningWatchlist) {
       throw new Error('Skanowanie watchlisty jest już w toku.');
     }
     this.isScanningWatchlist = true;
+    this.scanAbortController = new AbortController();
+    const signal = this.scanAbortController.signal;
     const results: TradingPlan[] = [];
+
+    // fastMode defaults to true for rapid 3-5s scans without heavy vision payload
+    const isFast = params.fastMode !== false;
 
     try {
       for (let i = 0; i < symbols.length; i++) {
+        if (signal.aborted) break;
+
         const symbol = symbols[i];
-        if (onProgress) {
-          onProgress(i + 1, symbols.length, symbol);
-        }
+        const num = i + 1;
+        const total = symbols.length;
+
+        onProgress?.({
+          current: num,
+          total,
+          symbol,
+          stage: `Pobieranie świec i wskaźników z Binance (${symbol})...`,
+        });
 
         try {
           // 1. Gather snapshot for this symbol (15m execution + 4h macro)
-          const snapshot = await aiTraderService.gatherSymbolSnapshot(symbol, '15m', true);
-          if (snapshot) {
-            // 2. Generate strategic plan via Brain
-            const plan = await aiTraderService.generateStrategyPlan({
-              apiKey: params.apiKey,
-              model: params.model,
-              snapshot,
-            });
+          const snapshot = await aiTraderService.gatherSymbolSnapshot(
+            symbol,
+            '15m',
+            true,
+            !isFast // if fastMode, skip heavy off-screen screenshots
+          );
 
-            if (plan && plan.direction !== 'NEUTRAL') {
-              this.addPlan(plan, true);
-              results.push(plan);
-            }
+          if (signal.aborted) break;
+
+          if (!snapshot) {
+            onProgress?.({
+              current: num,
+              total,
+              symbol,
+              stage: `Brak danych rynkowych dla ${symbol} – pomijam`,
+            });
+            continue;
           }
-        } catch (symErr) {
+
+          onProgress?.({
+            current: num,
+            total,
+            symbol,
+            stage: `Zapytanie do AI (${params.model}). Czekam na strategię...`,
+          });
+
+          // 2. Generate strategic plan via Brain with signal and 35s timeout
+          const plan = await aiTraderService.generateStrategyPlan({
+            apiKey: params.apiKey,
+            model: params.model,
+            snapshot,
+            signal,
+            timeoutMs: 35000,
+          });
+
+          if (signal.aborted) break;
+
+          if (plan && plan.direction !== 'NEUTRAL') {
+            this.addPlan(plan, true);
+            results.push(plan);
+            onProgress?.({
+              current: num,
+              total,
+              symbol,
+              stage: `✅ Gotowe! Wykryto setup ${plan.direction} na ${symbol}`,
+            });
+          } else {
+            onProgress?.({
+              current: num,
+              total,
+              symbol,
+              stage: `Rynek neutralny dla ${symbol} (brak setupu o R:R > 2.5)`,
+            });
+          }
+        } catch (symErr: any) {
+          if (signal.aborted) break;
           console.warn(`Watchlist scan error on ${symbol}:`, symErr);
+          onProgress?.({
+            current: num,
+            total,
+            symbol,
+            stage: `⚠️ ${symErr.message || 'Błąd analizy dla tej monety'}`,
+          });
         }
 
-        // Small 1.5s delay between API calls to avoid rate limits
-        if (i < symbols.length - 1) {
-          await new Promise((r) => setTimeout(r, 1500));
+        // Brief 1s delay before next coin if not aborted
+        if (i < symbols.length - 1 && !signal.aborted) {
+          await new Promise((r) => setTimeout(r, 1000));
         }
       }
     } finally {
       this.isScanningWatchlist = false;
+      this.scanAbortController = null;
       this.notify();
     }
 

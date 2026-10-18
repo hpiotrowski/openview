@@ -140,7 +140,12 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   const [plans, setPlans] = useState<TradingPlan[]>(() => setupGuardService.getPlans());
   const [radarFilter, setRadarFilter] = useState<'all' | 'active' | 'invalidated'>('all');
   const [isBatchScanning, setIsBatchScanning] = useState(false);
-  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; symbol: string } | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{
+    current: number;
+    total: number;
+    symbol: string;
+    stage: string;
+  } | null>(null);
 
   const activePlansCount = plans.filter((p) => p.status !== 'INVALIDATED').length;
   const invalidPlansCount = plans.filter((p) => p.status === 'INVALIDATED').length;
@@ -232,9 +237,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
     try {
       await setupGuardService.scanWatchlist(
         scanSymbols,
-        { apiKey, model: effectiveBrainModel },
-        (current, total, symbol) => {
-          setBatchProgress({ current, total, symbol });
+        { apiKey, model: effectiveBrainModel, fastMode: true },
+        (progress) => {
+          setBatchProgress(progress);
         }
       );
       setActiveTab('sentinel');
@@ -893,22 +898,43 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
 
               {/* Batch Scan Progress Banner */}
               {isBatchScanning && batchProgress && (
-                <div className="p-2.5 bg-[#141720] border border-[#2962ff]/30 rounded-lg space-y-1.5 animate-in fade-in">
+                <div className="p-3 bg-[#141720] border border-[#2962ff]/40 rounded-xl space-y-2 animate-in fade-in shadow-md">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="flex items-center gap-1.5 text-white font-medium text-[11px]">
-                      <RefreshCw size={11} className="animate-spin text-[#2962ff]" />
-                      Skanowanie ({batchProgress.current}/{batchProgress.total}): {batchProgress.symbol}
-                    </span>
-                    <span className="text-[#868993] font-mono text-[10px]">
-                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
-                    </span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <RefreshCw size={12} className="animate-spin text-[#2962ff] shrink-0" />
+                      <span className="font-bold text-white text-[11px] truncate">
+                        Skanowanie ({batchProgress.current}/{batchProgress.total}): {batchProgress.symbol}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[#868993] font-mono text-[10px]">
+                        {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                      </span>
+                      <button
+                        onClick={() => setupGuardService.cancelWatchlistScan()}
+                        className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px] font-bold border border-rose-500/40 transition-colors"
+                        title="Zatrzymaj skanowanie"
+                      >
+                        Anuluj
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Progress Bar */}
                   <div className="w-full bg-[#1e222d] h-1.5 rounded-full overflow-hidden">
                     <div
-                      className="bg-[#2962ff] h-full transition-all duration-300"
+                      className="bg-gradient-to-r from-[#2962ff] to-[#00e676] h-full transition-all duration-300"
                       style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
                     />
                   </div>
+
+                  {/* Dynamic sub-step stage text */}
+                  {batchProgress.stage && (
+                    <div className="text-[10px] text-[#868993] truncate font-medium flex items-center gap-1.5 pt-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#2962ff] animate-ping shrink-0" />
+                      <span className="truncate">{batchProgress.stage}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
