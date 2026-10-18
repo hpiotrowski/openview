@@ -14,7 +14,9 @@ export interface ChartController {
     entryPrice: number;
     takeProfit: number;
     stopLoss: number;
+    overlayId?: string;
   }) => string | null;
+  removePositionOverlay?: (overlayId: string) => void;
 }
 
 class ChartRegistryService {

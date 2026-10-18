@@ -26,6 +26,19 @@ export interface HTFAnalysis {
   nearestBearishOB: [number, number] | null;
 }
 
+export type PlanStatus = 'PENDING' | 'IN_ZONE' | 'TRIGGERED' | 'INVALIDATED';
+
+export interface GuardRules {
+  entryZone: [number, number];
+  targetPrice: number;
+  stopLoss: number;
+  invalidationPrice: number;
+  invalidationReason: string;
+  requiredCipherSignal: 'GREEN_DOT' | 'RED_DOT' | 'GOLD_DOT' | 'MFI_ABOVE_ZERO' | 'NONE';
+  cancelIfTpHitFirst: boolean;
+  expiresAt: number;
+}
+
 export interface TradingPlan {
   id: string;
   createdAt: number;
@@ -33,6 +46,9 @@ export interface TradingPlan {
   timeframe: string;
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
   confidence: number;
+  status?: PlanStatus;
+  invalidationReason?: string;
+  distanceToEntryPct?: number;
   title: string;
   summary: string;
   marketStructure: {
@@ -62,6 +78,7 @@ export interface TradingPlan {
     invalidationPrice: number;
     executionTrigger: string;
   };
+  guardRules?: GuardRules;
   htfContext?: {
     macro: HTFAnalysis;
     structure: HTFAnalysis;
@@ -378,6 +395,34 @@ class AITraderService {
     const bars: KLineData[] = controller.getBars();
     if (!bars || bars.length === 0) return null;
 
+    return this.buildSnapshotFromBars(
+      controller.symbol,
+      controller.interval,
+      bars,
+      fetchHTF,
+      controller.getSnapshotBase64()
+    );
+  }
+
+  /**
+   * Gathers full multi-dimensional snapshot for any symbol without needing an open chart pane
+   */
+  async gatherSymbolSnapshot(symbol: string, interval = '15m', fetchHTF = true): Promise<MarketSnapshot | null> {
+    const bars = await BinanceService.fetchKlines(symbol, interval, 300);
+    if (!bars || bars.length === 0) return null;
+    return this.buildSnapshotFromBars(symbol, interval, bars as any, fetchHTF);
+  }
+
+  /**
+   * Universal snapshot builder from klines
+   */
+  async buildSnapshotFromBars(
+    symbol: string,
+    interval: string,
+    bars: KLineData[],
+    fetchHTF = true,
+    fallbackImageBase64?: string | null
+  ): Promise<MarketSnapshot | null> {
     const currentBar = bars[bars.length - 1];
     const currentPrice = currentBar.close;
 
@@ -386,10 +431,10 @@ class AITraderService {
     let htfImageBase64: string | null = null;
     if (fetchHTF) {
       try {
-        const { macro, structure } = getHigherTimeframes(controller.interval);
+        const { macro, structure } = getHigherTimeframes(interval);
         const [macroBars, structBars] = await Promise.all([
-          BinanceService.fetchKlines(controller.symbol, macro, 100),
-          BinanceService.fetchKlines(controller.symbol, structure, 100),
+          BinanceService.fetchKlines(symbol, macro, 100),
+          BinanceService.fetchKlines(symbol, structure, 100),
         ]);
 
         const macroAnalysis = analyzeHTF(macro, macroBars);
@@ -407,7 +452,7 @@ class AITraderService {
           htfImageBase64 = await chartRegistry.renderBackgroundChartSnapshot(
             macroBars as any,
             {
-              symbol: controller.symbol,
+              symbol,
               interval: macro,
               includeVol: true,
               includeCipherB: false,
@@ -512,8 +557,8 @@ class AITraderService {
     let imageBase64: string | null = null;
     try {
       imageBase64 = await chartRegistry.renderBackgroundChartSnapshot(bars, {
-        symbol: controller.symbol,
-        interval: controller.interval,
+        symbol,
+        interval,
         includeCipherB: true,
         includeVol: true,
         barSpace: 9,
@@ -523,7 +568,7 @@ class AITraderService {
       console.warn('Background chart render failed, falling back to container snapshot:', e);
     }
     if (!imageBase64 || imageBase64.length < 4000) {
-      imageBase64 = controller.getSnapshotBase64();
+      imageBase64 = fallbackImageBase64 || null;
     }
 
     // 7. Cumulative Volume Delta (CVD & Divergences)
@@ -587,8 +632,8 @@ class AITraderService {
     } catch (e) {}
 
     return {
-      symbol: controller.symbol,
-      interval: controller.interval,
+      symbol,
+      interval,
       currentPrice,
       barsCount: bars.length,
       cipherB: {
@@ -936,6 +981,28 @@ Return strictly the JSON trade plan.`,
       }
     }
 
+    plan.status = 'PENDING';
+    plan.guardRules = {
+      entryZone: [
+        parsed.guardRules?.entryZone?.[0] ?? parsed.jevCriteria?.targetZoneMin ?? parsed.setup?.entryZone?.[0] ?? plan.setup.entryPrice,
+        parsed.guardRules?.entryZone?.[1] ?? parsed.jevCriteria?.targetZoneMax ?? parsed.setup?.entryZone?.[1] ?? plan.setup.entryPrice,
+      ],
+      targetPrice: Number(parsed.guardRules?.targetPrice) || plan.setup.takeProfit1,
+      stopLoss: Number(parsed.guardRules?.stopLoss) || plan.setup.stopLoss,
+      invalidationPrice:
+        Number(parsed.guardRules?.invalidationPrice) ||
+        Number(parsed.jevCriteria?.invalidationPrice) ||
+        plan.setup.stopLoss,
+      invalidationReason:
+        parsed.guardRules?.invalidationReason || 'Wybicie poziomu unieważnienia tezy Mózgu',
+      requiredCipherSignal:
+        parsed.guardRules?.requiredCipherSignal ||
+        parsed.jevCriteria?.requiredCipherSignal ||
+        'NONE',
+      cancelIfTpHitFirst: true,
+      expiresAt: Date.now() + 12 * 3600 * 1000,
+    };
+
     return plan;
   }
 
@@ -1107,21 +1174,48 @@ Respond ONLY with this exact JSON format without markdown fences:
    * Automatically draws the Long/Short Position Tool onto the active Klinecharts canvas
    */
   applyPlanToChart(plan: TradingPlan, chartId?: string): boolean {
-    const controller = chartRegistry.getActive(chartId);
-    if (!controller) return false;
+    const controllers = chartRegistry.getAll();
+    const matching = controllers.filter((c) => c.symbol === plan.symbol);
+    if (matching.length === 0) {
+      const active = chartRegistry.getActive(chartId);
+      if (active && active.symbol === plan.symbol) {
+        matching.push(active);
+      }
+    }
+    if (matching.length === 0) return false;
 
     if (plan.direction === 'NEUTRAL') {
       return false;
     }
 
-    const res = controller.createPositionOverlay({
-      direction: plan.direction,
-      entryPrice: plan.setup.entryPrice,
-      takeProfit: plan.setup.takeProfit1,
-      stopLoss: plan.setup.stopLoss,
+    const direction: 'LONG' | 'SHORT' = plan.direction;
+
+    let success = false;
+    matching.forEach((controller) => {
+      const res = controller.createPositionOverlay({
+        direction,
+        entryPrice: plan.setup.entryPrice,
+        takeProfit: plan.setup.takeProfit1,
+        stopLoss: plan.setup.stopLoss,
+        overlayId: `ai_setup_${plan.symbol}`,
+      });
+      if (res) success = true;
     });
 
-    return !!res;
+    return success;
+  }
+
+  /**
+   * Removes a plan's position overlay from matching charts
+   */
+  removePlanFromChart(plan: TradingPlan): void {
+    const controllers = chartRegistry.getAll();
+    const matching = controllers.filter((c) => c.symbol === plan.symbol);
+    matching.forEach((controller) => {
+      if (controller.removePositionOverlay) {
+        controller.removePositionOverlay(`ai_setup_${plan.symbol}`);
+      }
+    });
   }
 
   /**

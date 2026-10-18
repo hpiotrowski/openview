@@ -465,6 +465,7 @@ export const App: React.FC = () => {
         currentSymbol={currentSymbol}
         currentInterval={currentInterval}
         currentPrice={currentBarPrice}
+        onSelectSymbol={handleSelectSymbol}
       />
     </div>
   );

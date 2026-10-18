@@ -656,17 +656,20 @@ export const Chart: React.FC<ChartProps> = ({
           console.warn('Auto frame chart for AI failed:', e);
         }
       },
-      createPositionOverlay: ({ direction, entryPrice, takeProfit, stopLoss }) => {
+      createPositionOverlay: ({ direction, entryPrice, takeProfit, stopLoss, overlayId }) => {
         const chart = chartInstanceRef.current;
         if (!chart) return null;
         const bars = rawBarsRef.current;
         const lastBar = bars.length > 0 ? bars[bars.length - 1] : null;
         const currentTs = lastBar ? lastBar.timestamp : Date.now();
         const intervalMs = getIntervalMs(interval);
-        const targetTs = currentTs + intervalMs * 16;
+        const targetTs = currentTs + intervalMs * 24;
         const overlayName = direction === 'LONG' ? 'longPosition' : 'shortPosition';
+        const idToUse = overlayId || `ai_pos_${Date.now()}`;
         try {
+          chart.removeOverlay({ id: idToUse });
           const res = chart.createOverlay({
+            id: idToUse,
             name: overlayName,
             points: [
               { timestamp: currentTs, value: entryPrice },
@@ -677,10 +680,20 @@ export const Chart: React.FC<ChartProps> = ({
           setTimeout(() => {
             saveDrawingsDebounced();
           }, 100);
-          return typeof res === 'string' ? res : 'created';
+          return typeof res === 'string' ? res : idToUse;
         } catch (err) {
           console.error('Failed to create AI position overlay:', err);
           return null;
+        }
+      },
+      removePositionOverlay: (overlayId: string) => {
+        const chart = chartInstanceRef.current;
+        if (!chart) return;
+        try {
+          chart.removeOverlay({ id: overlayId });
+          saveDrawingsDebounced();
+        } catch (err) {
+          console.warn('Failed to remove AI position overlay:', err);
         }
       },
     });
@@ -869,6 +882,36 @@ export const Chart: React.FC<ChartProps> = ({
 
               // Unfreeze manual Y-axis and auto-scale to center candles
               resetChartScale(chart, lastBar.close);
+
+              // Automatically draw active AI setup for this symbol if one exists and is not invalidated
+              try {
+                const savedPlans = StorageService.getSavedPlans();
+                const activePlan = savedPlans.find(
+                  (p: any) =>
+                    p.symbol === loadSymbol &&
+                    p.status !== 'INVALIDATED' &&
+                    p.direction !== 'NEUTRAL'
+                );
+                if (activePlan) {
+                  const currentTs = lastBar.timestamp;
+                  const intervalMs = getIntervalMs(interval);
+                  const targetTs = currentTs + intervalMs * 24;
+                  const overlayName = activePlan.direction === 'LONG' ? 'longPosition' : 'shortPosition';
+                  const overlayId = `ai_setup_${loadSymbol}`;
+                  chart.removeOverlay({ id: overlayId });
+                  chart.createOverlay({
+                    id: overlayId,
+                    name: overlayName,
+                    points: [
+                      { timestamp: currentTs, value: activePlan.setup.entryPrice },
+                      { timestamp: targetTs, value: activePlan.setup.takeProfit1 },
+                      { timestamp: targetTs, value: activePlan.setup.stopLoss },
+                    ],
+                  });
+                }
+              } catch (e) {
+                console.warn('Auto-draw active AI plan failed:', e);
+              }
             }
 
             setLoading(false);

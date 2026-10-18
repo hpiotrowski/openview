@@ -20,6 +20,10 @@ import {
   Target,
   Zap,
   Activity,
+  Trash2,
+  TrendingUp,
+  TrendingDown,
+  Shield,
 } from 'lucide-react';
 import {
   aiTraderService,
@@ -34,6 +38,7 @@ import {
   AIProvider,
 } from '../services/aiTrader';
 import { StorageService } from '../services/storage';
+import { setupGuardService } from '../services/setupGuard';
 
 interface AICopilotDrawerProps {
   isOpen: boolean;
@@ -42,6 +47,7 @@ interface AICopilotDrawerProps {
   currentSymbol: string;
   currentInterval: string;
   currentPrice: number;
+  onSelectSymbol?: (symbol: string) => void;
 }
 
 export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
@@ -51,6 +57,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   currentSymbol,
   currentInterval,
   currentPrice,
+  onSelectSymbol,
 }) => {
   const [activeTab, setActiveTab] = useState<'brain' | 'sentinel' | 'settings'>('brain');
 
@@ -129,6 +136,23 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   const [appliedToast, setAppliedToast] = useState(false);
   const [autoFrameToast, setAutoFrameToast] = useState(false);
 
+  // Radar / Multi-Coin Setups State
+  const [plans, setPlans] = useState<TradingPlan[]>(() => setupGuardService.getPlans());
+  const [radarFilter, setRadarFilter] = useState<'all' | 'active' | 'invalidated'>('all');
+  const [isBatchScanning, setIsBatchScanning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; symbol: string } | null>(null);
+
+  const activePlansCount = plans.filter((p) => p.status !== 'INVALIDATED').length;
+  const invalidPlansCount = plans.filter((p) => p.status === 'INVALIDATED').length;
+
+  // Subscribe to live 1:1 Guard updates (WebSocket feed)
+  useEffect(() => {
+    const unsub = setupGuardService.subscribe((updated) => {
+      setPlans(updated);
+    });
+    return unsub;
+  }, []);
+
   // Sentinel State
   const [sentinelEnabled, setSentinelEnabled] = useState(() => StorageService.getAutoSentinel());
   const [isSentinelScanning, setIsSentinelScanning] = useState(false);
@@ -153,7 +177,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
   const handleGeneratePlan = async () => {
     if (!apiKey.trim()) {
       setActiveTab('settings');
-      setErrorMsg('Wprowadź swój klucz OpenRouter API Key, aby rozpocząć.');
+      setErrorMsg('Wprowadź swój klucz API w ustawieniach, aby rozpocząć.');
       return;
     }
 
@@ -179,9 +203,8 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       });
 
       setActivePlan(plan);
-      // Persist plan in storage
-      const existing = StorageService.getSavedPlans();
-      StorageService.setSavedPlans([plan, ...existing.slice(0, 9)]);
+      // Add to 1:1 Guard & auto-draw on chart immediately
+      setupGuardService.addPlan(plan, true);
     } catch (err: any) {
       console.error('Brain analysis error:', err);
       setErrorMsg(err.message || 'Wystąpił błąd podczas analizy rynku.');
@@ -189,6 +212,47 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
       setIsAnalyzing(false);
       setAnalysisStep('');
     }
+  };
+
+  // Batch scan popular watchlist symbols
+  const handleBatchScanWatchlist = async () => {
+    if (isBatchScanning) return;
+    if (!apiKey.trim()) {
+      setActiveTab('settings');
+      setErrorMsg('Wprowadź swój klucz API w zakładce Ustawienia przed skanowaniem.');
+      return;
+    }
+    const effectiveBrainModel =
+      brainModel === 'custom' && customBrainModel ? customBrainModel : brainModel;
+
+    const scanSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'NEARUSDT', 'SUIUSDT'];
+    setIsBatchScanning(true);
+    setErrorMsg(null);
+
+    try {
+      await setupGuardService.scanWatchlist(
+        scanSymbols,
+        { apiKey, model: effectiveBrainModel },
+        (current, total, symbol) => {
+          setBatchProgress({ current, total, symbol });
+        }
+      );
+      setActiveTab('sentinel');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Błąd podczas skanowania watchlisty.');
+    } finally {
+      setIsBatchScanning(false);
+      setBatchProgress(null);
+    }
+  };
+
+  const handleViewPlanOnChart = (plan: TradingPlan) => {
+    if (onSelectSymbol) {
+      onSelectSymbol(plan.symbol);
+    }
+    setTimeout(() => {
+      aiTraderService.applyPlanToChart(plan, activeChartId);
+    }, 150);
   };
 
   // Apply setup directly to chart
@@ -333,10 +397,16 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
           }`}
         >
           <ShieldAlert size={13} className={activeTab === 'sentinel' ? 'text-[#089981]' : ''} />
-          <span>Jev Strażnik</span>
-          {sentinelEnabled && (
-            <span className="w-1.5 h-1.5 rounded-full bg-[#089981] absolute top-2 right-2 animate-ping" />
-          )}
+          <span>Radar Setupów</span>
+          {activePlansCount > 0 ? (
+            <span className="px-1.5 py-0.5 rounded-full bg-emerald-500 text-black text-[10px] font-black leading-none">
+              {activePlansCount}
+            </span>
+          ) : plans.length > 0 ? (
+            <span className="px-1.5 py-0.5 rounded-full bg-[#2a2e39] text-[#868993] text-[10px] font-semibold leading-none">
+              {plans.length}
+            </span>
+          ) : null}
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -771,16 +841,291 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
           </div>
         )}
 
-        {/* ----------------- TAB 2: JEV SENTINEL (1m) ----------------- */}
+        {/* ----------------- TAB 2: MULTI-COIN RADAR & 1:1 GUARD ----------------- */}
         {activeTab === 'sentinel' && (
           <div className="space-y-4">
-            {/* Sentinel Control Card */}
-            <div className="p-4 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-3">
+            {/* Control & Batch Scan Header */}
+            <div className="p-3.5 bg-[#1e222d] border border-[#2a2e39] rounded-xl space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="font-bold text-white text-xs">Jev Strażnik Egzekucji</h4>
+                  <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
+                    <Shield className="text-[#089981]" size={14} />
+                    <span>Radar Setupów & Strażnik 1:1</span>
+                  </h4>
+                  <span className="text-[11px] text-[#868993] block">
+                    Ciągły nadzór na żywo (0 tokenów) + automatyczne rysunki
+                  </span>
+                </div>
+                <button
+                  onClick={() => aiTraderService.playTriggerChime()}
+                  className="py-1 px-2 rounded-lg bg-[#2a2e39] hover:bg-[#363c4e] text-xs text-[#868993] hover:text-white transition-colors"
+                  title="Test sygnału dźwiękowego gongu"
+                >
+                  <Volume2 size={13} />
+                </button>
+              </div>
+
+              {/* Action Buttons: Batch Scan & Clear Invalid */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={handleBatchScanWatchlist}
+                  disabled={isBatchScanning}
+                  className="flex-1 py-1.5 px-3 rounded-lg bg-[#2962ff] hover:bg-[#1e4bd8] text-xs font-bold text-white flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 shadow-md"
+                >
+                  <RefreshCw size={12} className={isBatchScanning ? 'animate-spin' : ''} />
+                  <span>{isBatchScanning ? 'Skanowanie...' : 'Skanuj Watchlistę'}</span>
+                </button>
+
+                <button
+                  onClick={() => setupGuardService.clearInvalidatedPlans()}
+                  disabled={invalidPlansCount === 0}
+                  className={`py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                    invalidPlansCount > 0
+                      ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25'
+                      : 'bg-[#2a2e39] text-[#868993] opacity-50 cursor-not-allowed'
+                  }`}
+                  title="Usuń setupy, które wybiły SL lub osiągnęły cel przed wejściem"
+                >
+                  <Trash2 size={12} />
+                  <span>Wyczyść nieaktualne {invalidPlansCount > 0 ? `(${invalidPlansCount})` : ''}</span>
+                </button>
+              </div>
+
+              {/* Batch Scan Progress Banner */}
+              {isBatchScanning && batchProgress && (
+                <div className="p-2.5 bg-[#141720] border border-[#2962ff]/30 rounded-lg space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 text-white font-medium text-[11px]">
+                      <RefreshCw size={11} className="animate-spin text-[#2962ff]" />
+                      Skanowanie ({batchProgress.current}/{batchProgress.total}): {batchProgress.symbol}
+                    </span>
+                    <span className="text-[#868993] font-mono text-[10px]">
+                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#1e222d] h-1.5 rounded-full overflow-hidden">
+                    <div
+                      className="bg-[#2962ff] h-full transition-all duration-300"
+                      style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Filter Pills */}
+            <div className="flex items-center gap-1.5 p-1 bg-[#161a25] rounded-lg border border-[#2a2e39] text-xs">
+              <button
+                onClick={() => setRadarFilter('all')}
+                className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
+                  radarFilter === 'all'
+                    ? 'bg-[#2a2e39] text-white shadow-sm'
+                    : 'text-[#868993] hover:text-[#d1d4dc]'
+                }`}
+              >
+                <span>Wszystkie</span>
+                <span className="px-1 py-0.2 rounded-full bg-white/10 text-[9px] font-mono font-normal">
+                  {plans.length}
+                </span>
+              </button>
+              <button
+                onClick={() => setRadarFilter('active')}
+                className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
+                  radarFilter === 'active'
+                    ? 'bg-emerald-500/20 text-emerald-400 shadow-sm border border-emerald-500/30'
+                    : 'text-[#868993] hover:text-[#d1d4dc]'
+                }`}
+              >
+                <span>Aktywne</span>
+                <span className="px-1 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-mono font-bold">
+                  {activePlansCount}
+                </span>
+              </button>
+              <button
+                onClick={() => setRadarFilter('invalidated')}
+                className={`flex-1 py-1 rounded text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 ${
+                  radarFilter === 'invalidated'
+                    ? 'bg-rose-500/20 text-rose-400 shadow-sm border border-rose-500/30'
+                    : 'text-[#868993] hover:text-[#d1d4dc]'
+                }`}
+              >
+                <span>Nieaktualne</span>
+                <span className="px-1 py-0.2 rounded-full bg-rose-500/20 text-rose-400 text-[9px] font-mono font-bold">
+                  {invalidPlansCount}
+                </span>
+              </button>
+            </div>
+
+            {/* Setup Cards List */}
+            <div className="space-y-3">
+              {(() => {
+                const filteredPlans = plans.filter((p) => {
+                  if (radarFilter === 'active') return p.status !== 'INVALIDATED';
+                  if (radarFilter === 'invalidated') return p.status === 'INVALIDATED';
+                  return true;
+                });
+
+                if (filteredPlans.length === 0) {
+                  return (
+                    <div className="p-6 bg-[#161a25] border border-[#2a2e39] rounded-xl text-center space-y-2">
+                      <div className="w-10 h-10 rounded-full bg-[#2a2e39] flex items-center justify-center mx-auto text-[#868993]">
+                        <Target size={18} />
+                      </div>
+                      <h5 className="font-semibold text-white text-xs">Brak setupów w tym widoku</h5>
+                      <p className="text-[11px] text-[#868993] leading-relaxed max-w-[280px] mx-auto">
+                        Kliknij <strong>"Skanuj Watchlistę"</strong> powyżej lub wygeneruj plan w zakładce{' '}
+                        <strong>"Mózg Strategii"</strong>. Setupy automatycznie naniosą się na wykres i będą nadzorowane 1:1.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return filteredPlans.map((plan) => (
+                  <div
+                    key={plan.id}
+                    className={`p-3.5 rounded-xl border space-y-2.5 transition-all ${
+                      plan.status === 'IN_ZONE'
+                        ? 'bg-[#14261e] border-emerald-500/60 shadow-lg shadow-emerald-950/40'
+                        : plan.status === 'TRIGGERED'
+                        ? 'bg-[#221833] border-purple-500/60 shadow-lg shadow-purple-950/40'
+                        : plan.status === 'INVALIDATED'
+                        ? 'bg-[#181b22] border-rose-500/30 opacity-75'
+                        : 'bg-[#1e222d] border-[#2a2e39] hover:border-[#3a4052]'
+                    }`}
+                  >
+                    {/* Card Header: Symbol, Direction, Status Badge, Actions */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-white text-sm tracking-wide font-mono">
+                          {plan.symbol}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-black flex items-center gap-1 ${
+                            plan.direction === 'LONG'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                              : plan.direction === 'SHORT'
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                              : 'bg-gray-500/20 text-gray-400 border border-gray-500/40'
+                          }`}
+                        >
+                          {plan.direction === 'LONG' ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                          {plan.direction}
+                        </span>
+                      </div>
+
+                      {/* Status Badge & Actions */}
+                      <div className="flex items-center gap-1.5">
+                        {plan.status === 'IN_ZONE' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-black animate-pulse flex items-center gap-1">
+                            <Zap size={10} /> W STREFIE 🔥
+                          </span>
+                        ) : plan.status === 'TRIGGERED' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-500 text-white flex items-center gap-1">
+                            <CheckCircle2 size={10} /> TRIGGER 🚀
+                          </span>
+                        ) : plan.status === 'INVALIDATED' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center gap-1">
+                            <AlertTriangle size={10} /> NIEAKTUALNY ❌
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30 flex items-center gap-1">
+                            <Clock size={10} /> CZEKA
+                          </span>
+                        )}
+
+                        <button
+                          onClick={() => handleViewPlanOnChart(plan)}
+                          className="p-1 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-[#868993] hover:text-white transition-colors"
+                          title="Pokaż i nanieś na wykres"
+                        >
+                          <Target size={13} />
+                        </button>
+                        <button
+                          onClick={() => setupGuardService.deletePlan(plan.id)}
+                          className="p-1 rounded bg-[#2a2e39] hover:bg-rose-500/20 text-[#868993] hover:text-rose-400 transition-colors"
+                          title="Usuń setup z radaru"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Status / Distance Notification Bar */}
+                    {plan.status === 'INVALIDATED' ? (
+                      <div className="p-2 rounded bg-rose-500/10 border border-rose-500/25 text-rose-300 text-[11px] flex items-start gap-1.5">
+                        <AlertTriangle size={13} className="shrink-0 mt-0.5 text-rose-400" />
+                        <div>
+                          <span className="font-bold block text-[10px] uppercase text-rose-400">
+                            Powód unieważnienia:
+                          </span>
+                          <span>{plan.invalidationReason || 'Zanegowany przez reguły obrony strategii'}</span>
+                        </div>
+                      </div>
+                    ) : plan.status === 'IN_ZONE' ? (
+                      <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] flex items-center gap-1.5 font-semibold">
+                        <Zap size={14} className="text-emerald-400 shrink-0" />
+                        <span>Cena jest w strefie wejścia! Obserwuj potwierdzenie Cipher B.</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between text-xs px-1">
+                        <span className="text-[#868993] flex items-center gap-1.5 text-[11px]">
+                          <Activity size={12} className="text-[#2962ff]" />
+                          Dystans do strefy wejścia:
+                        </span>
+                        <span className="font-mono font-bold text-white text-[11px]">
+                          {plan.distanceToEntryPct !== undefined && plan.distanceToEntryPct > 0
+                            ? `${plan.distanceToEntryPct}%`
+                            : 'W pobliżu'}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* 1:1 Guard Strategy Parameters */}
+                    <div className="grid grid-cols-2 gap-2 text-[11px] p-2.5 bg-[#141720] border border-[#262a35] rounded-lg font-mono">
+                      <div>
+                        <span className="text-[10px] text-[#868993] block font-sans">Strefa Wejścia</span>
+                        <span className="font-semibold text-white">
+                          ${plan.setup.entryZone[0].toLocaleString()} - ${plan.setup.entryZone[1].toLocaleString()}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[#868993] block font-sans">Stop Loss / Inwalidacja</span>
+                        <span className="font-semibold text-rose-400">
+                          ${(plan.guardRules?.invalidationPrice ?? plan.setup.stopLoss).toLocaleString()}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[#868993] block font-sans">Cel TP1 (Front-run)</span>
+                        <span className="font-semibold text-emerald-400">
+                          ${(plan.guardRules?.targetPrice ?? plan.setup.takeProfit1).toLocaleString()}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[#868993] block font-sans">Wymóg Wskaźników</span>
+                        <span className="font-semibold text-blue-400 truncate block">
+                          {plan.guardRules?.requiredCipherSignal || plan.jevCriteria?.requiredCipherSignal || 'Brak'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Strategy Summary */}
+                    {plan.summary && (
+                      <p className="text-[11px] text-[#868993] italic line-clamp-2 px-1">
+                        "{plan.summary}"
+                      </p>
+                    )}
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* Optional Jev LLM Strażnik (Collapsible / Advanced) */}
+            <div className="pt-2 border-t border-[#2a2e39] space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="font-bold text-white text-xs">Jev Strażnik LLM (Opcjonalny)</h5>
                   <span className="text-[11px] text-[#868993]">
-                    Model: <strong className="text-white font-mono">{jevModel}</strong>
+                    Głęboka weryfikacja świecy 1m przez model: <strong className="text-white font-mono">{jevModel}</strong>
                   </span>
                 </div>
                 <button
@@ -789,152 +1134,25 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                     setSentinelEnabled(next);
                     StorageService.setAutoSentinel(next);
                   }}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all ${
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all ${
                     sentinelEnabled
                       ? 'bg-emerald-500 text-black shadow-md'
                       : 'bg-[#2a2e39] text-[#868993] hover:text-white'
                   }`}
                 >
-                  <ShieldAlert size={14} />
+                  <ShieldAlert size={13} />
                   <span>{sentinelEnabled ? 'Aktywny' : 'Wyłączony'}</span>
                 </button>
               </div>
 
               {sentinelEnabled && (
-                <div className="flex items-center justify-between text-xs pt-1 border-t border-[#2a2e39] text-[#868993]">
+                <div className="flex items-center justify-between text-xs text-[#868993]">
                   <span className="flex items-center gap-1">
-                    <Clock size={13} className="text-emerald-400" /> Następny skan:
+                    <Clock size={12} className="text-emerald-400" /> Następny skan LLM:
                   </span>
                   <span className="font-mono font-bold text-emerald-400">{scanCountdown}s</span>
                 </div>
               )}
-
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  onClick={handleSentinelScan}
-                  disabled={isSentinelScanning || !activePlan}
-                  className="flex-1 py-1.5 px-3 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw size={13} className={isSentinelScanning ? 'animate-spin' : ''} />
-                  <span>Skanuj Teraz (Manual)</span>
-                </button>
-                <button
-                  onClick={() => aiTraderService.playTriggerChime()}
-                  className="py-1.5 px-2.5 rounded bg-[#2a2e39] hover:bg-[#363c4e] text-xs text-[#868993] hover:text-white transition-colors"
-                  title="Test sygnału dźwiękowego"
-                >
-                  <Volume2 size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* Active Monitored Setup Info */}
-            {activePlan ? (
-              <div className="p-3 bg-[#161a25] border border-[#2a2e39] rounded-xl text-xs space-y-2">
-                <span className="text-[10px] text-[#868993] uppercase font-bold tracking-wider block">
-                  Nadzorowany Setup ({activePlan.symbol})
-                </span>
-                <div className="flex items-center justify-between font-mono">
-                  <span
-                    className={`font-black ${
-                      activePlan.direction === 'LONG' ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
-                  >
-                    {activePlan.direction} @ ${activePlan.setup.entryPrice.toLocaleString()}
-                  </span>
-                  <span className="text-gray-400">
-                    Strefa: [${activePlan.setup.entryZone[0].toLocaleString()} - $
-                    {activePlan.setup.entryZone[1].toLocaleString()}]
-                  </span>
-                </div>
-                <div className="text-[11px] text-[#868993]">
-                  Trigger: {activePlan.jevCriteria.executionTrigger} (Wymóg: {activePlan.jevCriteria.requiredCipherSignal})
-                </div>
-              </div>
-            ) : (
-              <div className="p-4 bg-[#161a25] border border-[#2a2e39] rounded-xl text-xs text-center text-[#868993]">
-                Brak aktywnego planu. Przejdź do zakładki <strong>Mózg Strategii</strong> i wygeneruj setup.
-              </div>
-            )}
-
-            {/* Last Decision Banner */}
-            {lastDecision && (
-              <div
-                className={`p-3.5 rounded-xl border space-y-1.5 ${
-                  lastDecision.decision === 'ENTER'
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-200 animate-pulse'
-                    : lastDecision.decision === 'INVALIDATED'
-                    ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
-                    : 'bg-[#1e222d] border-[#363c4e] text-[#d1d4dc]'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`text-xs font-black uppercase px-2 py-0.5 rounded ${
-                        lastDecision.decision === 'ENTER'
-                          ? 'bg-emerald-500 text-black'
-                          : lastDecision.decision === 'INVALIDATED'
-                          ? 'bg-rose-500 text-white'
-                          : 'bg-yellow-500/20 text-yellow-400'
-                      }`}
-                    >
-                      {lastDecision.decision}
-                    </span>
-                    <span className="text-[10px] text-[#868993]">
-                      {new Date(lastDecision.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-[#868993] font-mono">
-                    Urgency: {lastDecision.urgency}
-                  </span>
-                </div>
-                <p className="text-xs leading-relaxed">{lastDecision.reason}</p>
-              </div>
-            )}
-
-            {/* Sentinel Decision History Logs */}
-            <div className="space-y-2">
-              <span className="text-[11px] font-semibold text-[#868993] uppercase tracking-wider block px-1">
-                Dziennik Sprawdzeń Jeva
-              </span>
-              <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                {sentinelLogs.length === 0 ? (
-                  <div className="text-[11px] text-[#868993] italic px-1">
-                    Brak wpisów. Jev sprawdza warunki co 60 sekund po aktywacji.
-                  </div>
-                ) : (
-                  sentinelLogs.map((log, i) => (
-                    <div
-                      key={i}
-                      className="p-2 bg-[#1e222d] border border-[#2a2e39] rounded-lg text-[11px] flex items-center justify-between font-mono"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            log.decision === 'ENTER'
-                              ? 'bg-emerald-400'
-                              : log.decision === 'INVALIDATED'
-                              ? 'bg-rose-400'
-                              : 'bg-yellow-400'
-                          }`}
-                        />
-                        <span className="font-bold text-white">{log.decision}</span>
-                        <span className="text-[#868993] truncate max-w-[200px] font-sans">
-                          {log.reason}
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-[#868993]">
-                        {new Date(log.timestamp).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          second: '2-digit',
-                        })}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
             </div>
           </div>
         )}
