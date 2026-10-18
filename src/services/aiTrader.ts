@@ -1023,38 +1023,31 @@ Return strictly the JSON trade plan.`,
       }
     }
 
-    // 3-Level Consensus & HARD VETO Enforcement with Kronos
+    // 3-Level Consensus & Statistical Radar Validation with Kronos
     try {
       const kronos = await kronosPromise;
       if (kronos && kronos.status === 'VERIFIED') {
+        plan.kronos = kronos;
         if (plan.direction === 'LONG') {
           if (kronos.direction === 'BULLISH') {
-            plan.kronos = kronos;
             if (kronos.envelopeLow && plan.setup.stopLoss > kronos.envelopeLow) {
-              plan.summary += `\n\n🛡️ [Konsensus Kronos A+]: 100% zgodności (+${kronos.driftPct}%). Uwaga: Dolna wstęga szumu statystycznego sięga $${kronos.envelopeLow.toLocaleString()} – SL został zweryfikowany pod kątem fałszywych knotów.`;
+              plan.summary += `\n\n🛡️ [Konsensus Kronos A+]: Zgodność kierunku (+${kronos.driftPct}%). Dolna wstęga szumu statystycznego sięga $${kronos.envelopeLow.toLocaleString()} – SL zweryfikowany pod kątem fałszywych knotów.`;
             }
+          } else if (kronos.direction === 'NEUTRAL') {
+            plan.summary += `\n\nℹ️ [Kronos Radar]: Model statystyczny widzi konsolidację (${kronos.confidence}% korytarz $${kronos.envelopeLow}-$${kronos.envelopeHigh}). Mózg celuje w wybicie popytowe z retestu.`;
           } else {
-            console.warn(`[Kronos HARD VETO] Brain suggested LONG but Kronos predicted ${kronos.direction} (${kronos.driftPct}%)`);
-            plan.direction = 'NEUTRAL';
-            plan.kronos = { ...kronos, status: 'VETOED' };
-            plan.title = `${snapshot.symbol} VETO - Brak zgody Kronos (${kronos.direction})`;
-            plan.summary = `🛑 HARD VETO (Zasada Snajpera): Mózg AI zidentyfikował potencjał na pozycję LONG, ale 102M model statystyczny Kronos prognozuje ${kronos.direction} (drift: ${kronos.driftPct! > 0 ? '+' : ''}${kronos.driftPct}%). Zgodnie z zasadą snajpera – przy braku 100% konsensusu setup zostaje zablokowany, by chronić Twój depozyt przed fałszywym ruchem.`;
+            plan.summary += `\n\n⚠️ [Ostrzeżenie Kronos]: Mózg planuje LONG, ale Kronos wskazuje pęd ${kronos.direction} (${kronos.driftPct}%). Wymagany ścisły Stop Loss.`;
           }
         } else if (plan.direction === 'SHORT') {
           if (kronos.direction === 'BEARISH') {
-            plan.kronos = kronos;
             if (kronos.envelopeHigh && plan.setup.stopLoss < kronos.envelopeHigh) {
-              plan.summary += `\n\n🛡️ [Konsensus Kronos A+]: 100% zgodności (${kronos.driftPct}%). Uwaga: Górna wstęga szumu statystycznego sięga $${kronos.envelopeHigh.toLocaleString()} – SL został zweryfikowany pod kątem fałszywych knotów.`;
+              plan.summary += `\n\n🛡️ [Konsensus Kronos A+]: Zgodność kierunku (${kronos.driftPct}%). Górna wstęga szumu statystycznego sięga $${kronos.envelopeHigh.toLocaleString()} – SL zweryfikowany.`;
             }
+          } else if (kronos.direction === 'NEUTRAL') {
+            plan.summary += `\n\nℹ️ [Kronos Radar]: Model statystyczny widzi konsolidację (${kronos.confidence}% korytarz $${kronos.envelopeLow}-$${kronos.envelopeHigh}). Mózg celuje w impuls podażowy.`;
           } else {
-            console.warn(`[Kronos HARD VETO] Brain suggested SHORT but Kronos predicted ${kronos.direction} (${kronos.driftPct}%)`);
-            plan.direction = 'NEUTRAL';
-            plan.kronos = { ...kronos, status: 'VETOED' };
-            plan.title = `${snapshot.symbol} VETO - Brak zgody Kronos (${kronos.direction})`;
-            plan.summary = `🛑 HARD VETO (Zasada Snajpera): Mózg AI zidentyfikował potencjał na pozycję SHORT, ale 102M model statystyczny Kronos prognozuje ${kronos.direction} (drift: ${kronos.driftPct! > 0 ? '+' : ''}${kronos.driftPct}%). Zgodnie z zasadą snajpera – przy braku 100% konsensusu setup zostaje zablokowany, by chronić Twój depozyt przed fałszywym ruchem.`;
+            plan.summary += `\n\n⚠️ [Ostrzeżenie Kronos]: Mózg planuje SHORT, ale Kronos wskazuje pęd ${kronos.direction} (${kronos.driftPct}%). Wymagany ścisły Stop Loss.`;
           }
-        } else {
-          plan.kronos = kronos;
         }
       } else {
         plan.kronos = { status: 'OFFLINE' };
@@ -1094,9 +1087,9 @@ Return strictly the JSON trade plan.`,
   async fetchKronosForecast(symbol: string, interval: string): Promise<KronosConsensus> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
       const res = await fetch(
-        `/api/kronos/forecast?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&steps=24&samples=5`,
+        `/api/kronos/forecast?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&steps=12&samples=3`,
         { signal: controller.signal }
       );
       clearTimeout(timeoutId);

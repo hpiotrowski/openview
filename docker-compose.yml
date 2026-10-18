@@ -25,6 +25,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
     environment:
       - KRONOS_URL=http://openview-kronos:8088
       - HOST=0.0.0.0

@@ -547,7 +547,7 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                       {activePlan.kronos?.status === 'VERIFIED' && (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
                           <Cpu size={11} className="text-cyan-400" />
-                          KRONOS A+
+                          KRONOS {activePlan.kronos.confidence ? `${activePlan.kronos.confidence}%` : 'A+'}
                         </span>
                       )}
                     </div>
@@ -560,22 +560,42 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                     </div>
                   </div>
 
-                  {/* Pullback / Entry Notification */}
+                  {/* Pullback / Entry Notification with clear reasoning */}
                   {activePlan.setup.entryPrice < currentPrice && activePlan.direction === 'LONG' ? (
-                    <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300 text-xs flex items-center gap-2 font-medium">
-                      <Clock size={14} className="text-blue-400 shrink-0" />
-                      <span>
-                        Wejście z korekty (Limit Pullback): Czekaj na cofnięcie do{' '}
-                        <strong>${activePlan.setup.entryPrice.toLocaleString()}</strong>
-                      </span>
+                    <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-300 text-xs space-y-1">
+                      <div className="flex items-center gap-2 font-medium">
+                        <Clock size={14} className="text-blue-400 shrink-0" />
+                        <span>
+                          <strong>Zlecenie Limit:</strong> Kupujemy na korekcie do{' '}
+                          <strong className="text-white">${activePlan.setup.entryPrice.toLocaleString()}</strong>
+                          {currentPrice > 0 && (
+                            <span className="ml-1 text-blue-400 font-mono text-[11px]">
+                              (-{Math.abs(((activePlan.setup.entryPrice - currentPrice) / currentPrice) * 100).toFixed(1)}% od ceny rynkowej)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-[#868993] pl-5 leading-normal">
+                        💡 Zamiast gonić szczyt zielonej świecy po cenie rynkowej, Mózg stawia zlecenie na dołku lokalnej korekty (węzeł wolumenowy / strefa popytu), by zminimalizować ryzyko i zapewnić ciasny SL.
+                      </div>
                     </div>
                   ) : activePlan.setup.entryPrice > currentPrice && activePlan.direction === 'SHORT' ? (
-                    <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/25 text-purple-300 text-xs flex items-center gap-2 font-medium">
-                      <Clock size={14} className="text-purple-400 shrink-0" />
-                      <span>
-                        Wejście z odbicia (Limit Bounce): Czekaj na podejście do{' '}
-                        <strong>${activePlan.setup.entryPrice.toLocaleString()}</strong>
-                      </span>
+                    <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/25 text-purple-300 text-xs space-y-1">
+                      <div className="flex items-center gap-2 font-medium">
+                        <Clock size={14} className="text-purple-400 shrink-0" />
+                        <span>
+                          <strong>Zlecenie Limit:</strong> Sprzedajemy na odbiciu do{' '}
+                          <strong className="text-white">${activePlan.setup.entryPrice.toLocaleString()}</strong>
+                          {currentPrice > 0 && (
+                            <span className="ml-1 text-purple-400 font-mono text-[11px]">
+                              (+{Math.abs(((activePlan.setup.entryPrice - currentPrice) / currentPrice) * 100).toFixed(1)}% od ceny rynkowej)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-[#868993] pl-5 leading-normal">
+                        💡 Zamiast sprzedawać w dołek, czekamy na podejście pod opór (węzeł wolumenowy / strefa podaży), by wejść po wyższej cenie z minimalnym ryzykiem.
+                      </div>
                     </div>
                   ) : (
                     <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs flex items-center gap-2 font-medium">
@@ -587,7 +607,9 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   {/* 3 BIG TRADE NUMBER CARDS */}
                   <div className="grid grid-cols-3 gap-2 font-mono">
                     <div className="p-2.5 rounded-xl bg-[#131722] border border-[#2a2e39]">
-                      <span className="text-[9px] text-[#868993] uppercase block font-sans font-bold">WEJŚCIE</span>
+                      <span className="text-[9px] text-[#868993] uppercase block font-sans font-bold">
+                        {activePlan.setup.entryPrice !== currentPrice ? 'WEJŚCIE (LIMIT)' : 'WEJŚCIE (MARKET)'}
+                      </span>
                       <span className="font-black text-white text-xs block truncate mt-0.5">
                         ${activePlan.setup.entryPrice.toLocaleString()}
                       </span>
@@ -608,28 +630,48 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                     </div>
                   </div>
 
-                  {/* Kronos Probability Gauge (Requested by User) */}
-                  {activePlan.kronos?.confidence !== undefined && (
+                  {/* Kronos Probability & Foundation Model Consensus */}
+                  {activePlan.kronos?.confidence !== undefined ? (
                     <div className="p-2.5 rounded-xl bg-[#141720] border border-[#262a35] space-y-1.5 text-xs font-mono">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-[#868993] font-sans flex items-center gap-1.5">
+                        <span className="text-[#868993] font-sans flex items-center gap-1.5 font-bold">
                           <Cpu size={12} className="text-cyan-400" />
                           <span>Prawdopodobieństwo Kronos:</span>
                         </span>
-                        <span className="font-bold text-cyan-300">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          activePlan.kronos.direction === 'BULLISH'
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : activePlan.kronos.direction === 'BEARISH'
+                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                            : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                        }`}>
                           {activePlan.kronos.confidence}% Ścieżek {activePlan.kronos.direction}
                         </span>
                       </div>
                       <div className="w-full bg-[#1e222d] h-2 rounded-full overflow-hidden">
                         <div
-                          className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-full transition-all duration-300"
+                          className={`h-full transition-all duration-300 ${
+                            activePlan.kronos.direction === 'BEARISH'
+                              ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                              : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                          }`}
                           style={{ width: `${activePlan.kronos.confidence}%` }}
                         />
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-[#868993]">
-                        <span>Oczekiwany pęd: +{activePlan.kronos.driftPct}%</span>
-                        <span>Szum rynkowy (min/max): ${activePlan.kronos.envelopeLow?.toLocaleString()} - ${activePlan.kronos.envelopeHigh?.toLocaleString()}</span>
+                        <span>Oczekiwany pęd: <strong className="text-zinc-200">{activePlan.kronos.driftPct! > 0 ? '+' : ''}{activePlan.kronos.driftPct}%</strong></span>
+                        <span>Szum rynkowy (min/max): <strong className="text-zinc-200">${activePlan.kronos.envelopeLow?.toLocaleString()} - ${activePlan.kronos.envelopeHigh?.toLocaleString()}</strong></span>
                       </div>
+                    </div>
+                  ) : (
+                    <div className="px-2.5 py-1.5 rounded-xl bg-[#141720] border border-[#262a35] flex items-center justify-between text-[10px]">
+                      <span className="text-[#868993] flex items-center gap-1.5 font-sans">
+                        <Cpu size={12} className="text-zinc-500" />
+                        <span>Radar Statystyczny Kronos:</span>
+                      </span>
+                      <span className="text-amber-400/80 font-mono">
+                        {activePlan.kronos?.status === 'OFFLINE' ? '⚡ Offline / Przekroczony limit' : '⚡ Oczekiwanie na model'}
+                      </span>
                     </div>
                   )}
 
