@@ -1035,8 +1035,12 @@ Return strictly the JSON trade plan.`,
             }
           } else if (kronos.direction === 'NEUTRAL') {
             plan.summary += `\n\nℹ️ [Kronos Radar]: Model statystyczny widzi konsolidację (${kronos.confidence}% korytarz $${kronos.envelopeLow}-$${kronos.envelopeHigh}). Mózg celuje w wybicie popytowe z retestu.`;
-          } else {
-            plan.summary += `\n\n⚠️ [Ostrzeżenie Kronos]: Mózg planuje LONG, ale Kronos wskazuje pęd ${kronos.direction} (${kronos.driftPct}%). Wymagany ścisły Stop Loss.`;
+          } else if (kronos.direction === 'BEARISH' && (kronos.confidence ?? 0) >= 60) {
+            // HARD VETO: Mózg chciał LONG, ale Kronos wykrył silny spadek (BEARISH)
+            plan.direction = 'NEUTRAL';
+            plan.kronos = { ...kronos, status: 'VETOED' };
+            plan.title = `${snapshot.symbol} VETO - Kronos wykrył silny pęd spadkowy (${kronos.driftPct}%)`;
+            plan.summary = `🛑 HARD VETO KRONOS (Ochrona Kapitału): Mózg techniczny rozważał pozycję LONG, ale 102M model statystyczny Kronos prognozuje z prawdopodobieństwem ${kronos.confidence}% ruch SPADKOWY (${kronos.driftPct}% do dolnej wstęgi $${kronos.envelopeLow}). Otwarcie pozycji długiej wbrew tak silnemu pędowi grozi natychmiastowym wybiciem Stop Lossa ($${plan.setup.stopLoss}). Zgodnie z Zasadą Snajpera: transakcja została zablokowana – chronimy Twój depozyt przed wejściem pod prąd!`;
           }
         } else if (plan.direction === 'SHORT') {
           if (kronos.direction === 'BEARISH') {
@@ -1045,8 +1049,12 @@ Return strictly the JSON trade plan.`,
             }
           } else if (kronos.direction === 'NEUTRAL') {
             plan.summary += `\n\nℹ️ [Kronos Radar]: Model statystyczny widzi konsolidację (${kronos.confidence}% korytarz $${kronos.envelopeLow}-$${kronos.envelopeHigh}). Mózg celuje w impuls podażowy.`;
-          } else {
-            plan.summary += `\n\n⚠️ [Ostrzeżenie Kronos]: Mózg planuje SHORT, ale Kronos wskazuje pęd ${kronos.direction} (${kronos.driftPct}%). Wymagany ścisły Stop Loss.`;
+          } else if (kronos.direction === 'BULLISH' && (kronos.confidence ?? 0) >= 60) {
+            // HARD VETO: Mózg chciał SHORT, ale Kronos wykrył silny pęd wzrostowy (BULLISH)
+            plan.direction = 'NEUTRAL';
+            plan.kronos = { ...kronos, status: 'VETOED' };
+            plan.title = `${snapshot.symbol} VETO - Kronos wykrył silny pęd wzrostowy (+${kronos.driftPct}%)`;
+            plan.summary = `🛑 HARD VETO KRONOS (Ochrona Kapitału): Mózg techniczny rozważał pozycję SHORT na retest oporu, ale 102M model statystyczny Kronos prognozuje z prawdopodobieństwem ${kronos.confidence}% ruch W GÓRĘ (+${kronos.driftPct}% do górnej wstęgi $${kronos.envelopeHigh}). Otwarcie shorta grozi natychmiastowym wybiciem Stop Lossa ($${plan.setup.stopLoss}). Zgodnie z Zasadą Snajpera: transakcja została zablokowana – chronimy Twój depozyt przed grą pod pędzący pociąg!`;
           }
         }
       } else {

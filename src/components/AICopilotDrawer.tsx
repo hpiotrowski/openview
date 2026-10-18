@@ -501,23 +501,34 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                   {activePlan.kronos?.confidence !== undefined && (
                     <div className="p-2.5 rounded-xl bg-[#141720] border border-[#262a35] space-y-1.5 text-xs font-mono">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-[#868993] font-sans flex items-center gap-1">
+                        <span className="text-[#868993] font-sans flex items-center gap-1 font-bold">
                           <Cpu size={12} className="text-cyan-400" /> Model Kronos (102M FM):
                         </span>
-                        <span className="font-bold text-amber-400">
-                          {activePlan.kronos.direction} ({activePlan.kronos.driftPct! > 0 ? '+' : ''}
-                          {activePlan.kronos.driftPct}%)
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          activePlan.kronos.direction === 'BULLISH'
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : activePlan.kronos.direction === 'BEARISH'
+                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {activePlan.kronos.direction} ({activePlan.kronos.driftPct! > 0 ? '+' : ''}{activePlan.kronos.driftPct}%)
                         </span>
                       </div>
                       <div className="w-full bg-[#1e222d] h-2 rounded-full overflow-hidden">
                         <div
-                          className="bg-amber-400 h-full transition-all duration-300"
+                          className={`h-full transition-all duration-300 ${
+                            activePlan.kronos.direction === 'BULLISH'
+                              ? 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                              : activePlan.kronos.direction === 'BEARISH'
+                              ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                              : 'bg-amber-400'
+                          }`}
                           style={{ width: `${activePlan.kronos.confidence}%` }}
                         />
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-[#868993]">
-                        <span>Pewność: {activePlan.kronos.confidence}% ścieżek Monte Carlo</span>
-                        <span>Dolny szum: ${activePlan.kronos.envelopeLow?.toLocaleString()}</span>
+                        <span>Pewność: {activePlan.kronos.confidence}% ścieżek {activePlan.kronos.direction}</span>
+                        <span>Szum rynkowy: ${activePlan.kronos.envelopeLow?.toLocaleString()} - ${activePlan.kronos.envelopeHigh?.toLocaleString()}</span>
                       </div>
                     </div>
                   )}
@@ -541,13 +552,26 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                         }`}
                       >
                         {activePlan.direction === 'LONG' ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                        {activePlan.direction} A+
+                        {activePlan.direction} {activePlan.kronos?.direction === (activePlan.direction === 'LONG' ? 'BULLISH' : 'BEARISH') ? 'A+' : ''}
                       </span>
 
                       {activePlan.kronos?.status === 'VERIFIED' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border flex items-center gap-1 ${
+                          (activePlan.direction === 'LONG' && activePlan.kronos.direction === 'BULLISH') ||
+                          (activePlan.direction === 'SHORT' && activePlan.kronos.direction === 'BEARISH')
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                            : activePlan.kronos.direction === 'NEUTRAL'
+                            ? 'bg-zinc-800 text-zinc-300 border-zinc-700'
+                            : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                        }`}>
                           <Cpu size={11} className="text-cyan-400" />
-                          KRONOS {activePlan.kronos.confidence ? `${activePlan.kronos.confidence}%` : 'A+'}
+                          { (activePlan.direction === 'LONG' && activePlan.kronos.direction === 'BULLISH') ||
+                            (activePlan.direction === 'SHORT' && activePlan.kronos.direction === 'BEARISH')
+                              ? `KRONOS ZGODNY ${activePlan.kronos.confidence}%`
+                              : activePlan.kronos.direction === 'NEUTRAL'
+                              ? `KRONOS KONSOLIDACJA`
+                              : `⚠️ KRONOS PRZECIWNY (${activePlan.kronos.direction})`
+                          }
                         </span>
                       )}
                     </div>
