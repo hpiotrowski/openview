@@ -1,0 +1,35 @@
+services:
+  openview-kronos:
+    container_name: openview-kronos
+    build:
+      context: ./kronos-service
+      dockerfile: Dockerfile
+    ports:
+      - "8088:8088"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  openview-web:
+    container_name: openview-web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - KRONOS_URL=http://openview-kronos:8088
+      - HOST=0.0.0.0
+      - PORT=3000
+    depends_on:
+      openview-kronos:
+        condition: service_healthy
+    restart: unless-stopped

@@ -8,6 +8,7 @@ export default defineConfig({
   base: './',
   server: {
     port: 3000,
+    host: '0.0.0.0',
     proxy: {
       '/api/opencode': {
         target: 'https://opencode.ai',
@@ -18,6 +19,11 @@ export default defineConfig({
         target: 'https://openrouter.ai',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/openrouter/, ''),
+      },
+      '/api/kronos': {
+        target: process.env.KRONOS_URL || 'http://localhost:8088',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/kronos/, ''),
       },
     },
   },

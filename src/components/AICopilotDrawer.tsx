@@ -24,6 +24,7 @@ import {
   TrendingUp,
   TrendingDown,
   Shield,
+  Cpu,
 } from 'lucide-react';
 import {
   aiTraderService,
@@ -1037,6 +1038,26 @@ export const AICopilotDrawer: React.FC<AICopilotDrawerProps> = ({
                           {plan.direction === 'LONG' ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
                           {plan.direction}
                         </span>
+
+                        {plan.kronos?.status === 'VERIFIED' && (
+                          <span
+                            title={`Kronos Konsensus A+: ${plan.kronos.direction} (${plan.kronos.driftPct! > 0 ? '+' : ''}${plan.kronos.driftPct}% drift, pewność: ${plan.kronos.confidence}%)`}
+                            className="px-1.5 py-0.5 rounded text-[10px] font-black bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 flex items-center gap-1 shadow-sm shadow-cyan-500/20"
+                          >
+                            <Cpu size={10} className="text-cyan-400" />
+                            KRONOS A+ {plan.kronos.driftPct! > 0 ? '+' : ''}{plan.kronos.driftPct}%
+                          </span>
+                        )}
+
+                        {plan.kronos?.status === 'VETOED' && (
+                          <span
+                            title={`Kronos VETO: Model statystyczny zablokował setup z powodu rozbieżności (${plan.kronos.direction} ${plan.kronos.driftPct}%)`}
+                            className="px-1.5 py-0.5 rounded text-[10px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center gap-1"
+                          >
+                            <ShieldAlert size={10} className="text-rose-400" />
+                            KRONOS VETO
+                          </span>
+                        )}
                       </div>
 
                       {/* Status Badge & Actions */}
