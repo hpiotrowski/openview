@@ -1095,9 +1095,9 @@ Return strictly the JSON trade plan.`,
   async fetchKronosForecast(symbol: string, interval: string): Promise<KronosConsensus> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const timeoutId = setTimeout(() => controller.abort(), 35000);
       const res = await fetch(
-        `/api/kronos/forecast?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&steps=12&samples=3`,
+        `/api/kronos/forecast?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&steps=8&samples=2`,
         { signal: controller.signal }
       );
       clearTimeout(timeoutId);

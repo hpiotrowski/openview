@@ -29,10 +29,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model state
+# Global model state & in-memory cache
 tokenizer: Optional[KronosTokenizer] = None
 model: Optional[Kronos] = None
 device: str = "cpu"
+forecast_cache = {}
+
+def get_cached_forecast(key: str, max_age: float = 90.0):
+    if key in forecast_cache:
+        data, ts = forecast_cache[key]
+        if time.time() - ts < max_age:
+            return data
+    return None
+
+def set_cached_forecast(key: str, data: dict):
+    forecast_cache[key] = (data, time.time())
 
 @app.on_event("startup")
 def load_models():
@@ -45,6 +56,11 @@ def load_models():
         device = "mps"
     else:
         device = "cpu"
+        try:
+            torch.set_num_threads(4)
+            print("🧵 Set PyTorch CPU threads to 4 for optimal throughput")
+        except Exception:
+            pass
     print(f"💻 Selected compute device: {device}")
 
     try:
@@ -274,12 +290,20 @@ def health():
 def get_forecast(
     symbol: str = Query("BTCUSDT", description="Binance symbol e.g. BTCUSDT"),
     interval: str = Query("1h", description="Candle interval e.g. 15m, 1h, 4h"),
-    steps: int = Query(24, ge=4, le=72, description="Number of bars to predict"),
-    samples: int = Query(5, ge=1, le=10, description="Monte Carlo sample count")
+    steps: int = Query(8, ge=4, le=72, description="Number of bars to predict"),
+    samples: int = Query(2, ge=1, le=10, description="Monte Carlo sample count")
 ):
     try:
+        cache_key = f"{symbol.upper()}_{interval}_{steps}_{samples}"
+        cached = get_cached_forecast(cache_key, max_age=90.0)
+        if cached:
+            cached_copy = dict(cached)
+            cached_copy["cached"] = True
+            return cached_copy
+
         t0 = time.time()
-        df = fetch_binance_klines(symbol, interval, limit=400)
+        # 96 bars = 24h on 15m, perfect context without quadratic attention lag
+        df = fetch_binance_klines(symbol, interval, limit=96)
         result = run_kronos_inference(
             df=df,
             timestamps=df["timestamps"],
@@ -287,6 +311,7 @@ def get_forecast(
             sample_count=samples
         )
         result["latency_ms"] = int((time.time() - t0) * 1000)
+        set_cached_forecast(cache_key, result)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
