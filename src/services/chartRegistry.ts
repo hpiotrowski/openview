@@ -76,7 +76,7 @@ class ChartRegistryService {
               }
             }
 
-            return composite.toDataURL('image/png');
+            return composite.toDataURL('image/jpeg', 0.85);
           }
         } catch (err) {
           console.warn('Composite snapshot failed, falling back to native capture', err);
@@ -86,7 +86,7 @@ class ChartRegistryService {
 
     if (chart && typeof chart.getConvertPictureUrl === 'function') {
       try {
-        return chart.getConvertPictureUrl(true, 'png', '#0c0d10');
+        return chart.getConvertPictureUrl(true, 'jpeg', '#0c0d10');
       } catch (e) {
         console.warn('Native getConvertPictureUrl failed', e);
       }
@@ -214,7 +214,7 @@ class ChartRegistryService {
         console.warn('Background chart has 0 bars loaded after setDataLoader!');
       }
 
-      const imgUrl = chart.getConvertPictureUrl(true, 'png', '#0c0d10');
+      const imgUrl = chart.getConvertPictureUrl(true, 'jpeg', '#0c0d10');
 
       dispose(hiddenDiv);
       if (document.body.contains(hiddenDiv)) {

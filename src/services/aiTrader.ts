@@ -882,7 +882,8 @@ Return strictly the JSON trade plan.`,
     const config = getProviderConfig(cleanKey);
 
     const timeoutController = new AbortController();
-    const timer = setTimeout(() => timeoutController.abort(), params.timeoutMs || 40000);
+    const effectiveTimeout = params.timeoutMs || 80000;
+    const timer = setTimeout(() => timeoutController.abort(), effectiveTimeout);
     const effectiveSignal = combineSignals(params.signal, timeoutController.signal);
 
     // Launch Kronos statistical forecast in parallel with LLM Brain (Double-Blind execution)
@@ -910,8 +911,8 @@ Return strictly the JSON trade plan.`,
         }
         throw new Error(
           `Przekroczono limit czasu oczekiwania na model AI (${Math.round(
-            (params.timeoutMs || 40000) / 1000
-          )}s). Serwer AI nie odpowiedział na czas.`
+            effectiveTimeout / 1000
+          )}s). Serwer AI nie odpowiedział na czas. Jeśli OpenRouter ma opóźnienia, wybierz szybszy model (np. Gemini 2.0 Flash) w ustawieniach u góry.`
         );
       }
       throw fetchErr;
